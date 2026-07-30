@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+
+# electron-builder output
+apps/desktop/dist/
+
+# misc
+.DS_Store
+*.pem
+*.log
+
+# env
+.env*
