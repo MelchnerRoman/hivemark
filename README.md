@@ -27,7 +27,7 @@ A single npm-workspaces monorepo with three packages:
 
 ## Prerequisites
 
-- Node.js `>=22.9.0` (the repo currently runs on 22.6.0 with an engine warning you can ignore, but newer is recommended)
+- Node.js `>=22`
 - npm (workspaces-aware; this repo uses npm, not yarn/pnpm)
 
 ## Setup
