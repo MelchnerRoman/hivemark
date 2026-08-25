@@ -11,6 +11,7 @@ export type McpTool = {
   name: string;
   description: string;
   icon: string;
+  status: "ready" | "needs_setup";
 };
 
 export type AgentGrant = {
@@ -21,7 +22,11 @@ export type AgentGrant = {
 
 export type Agent = {
   id: string;
+  /** The Task Room this agent was created in — always set, shown as "Created in X". */
   taskRoomId: string;
+  /** When set, this agent is also mentionable/usable in every Task Room within this
+   * Room (not just its home Task Room). Null = task-room-scoped only (original behavior). */
+  roomId: string | null;
   name: string;
   color: string;
   avatarEmoji: string;
@@ -75,6 +80,7 @@ export type ChatMessage = {
   content: string;
   createdAt: string;
   mentionedAgentIds?: string[];
+  editedAt: string | null;
 };
 
 export type DirectMessage = {
@@ -83,6 +89,7 @@ export type DirectMessage = {
   authorType: "member" | "agent";
   content: string;
   createdAt: string;
+  editedAt: string | null;
 };
 
 export type WorkflowStep = {
@@ -100,6 +107,11 @@ export type Workflow = {
   status: "draft" | "running" | "done";
 };
 
+export type LoopRun = {
+  timestamp: string;
+  outcome: string;
+};
+
 export type Loop = {
   id: string;
   taskRoomId: string;
@@ -108,6 +120,8 @@ export type Loop = {
   active: boolean;
   lastRun: string | null;
   nextRun: string | null;
+  /** Most recent runs, newest first. Real — recorded by the scheduler each time it fires. */
+  runs: LoopRun[];
 };
 
 export type TodoItem = {
@@ -138,9 +152,40 @@ export type Room = {
   taskRoomIds: string[];
 };
 
-export type WorkspaceTab = "chat" | "workflows" | "loops" | "todos" | "agents";
+export type WorkspaceTab = "chat" | "workflows" | "loops" | "todos" | "agents" | "files" | "preview";
 
-export type ConnectionKey = "anthropic" | "github" | "postgres" | "slack" | "linear";
+export type SharedFile = {
+  path: string;
+  size: number;
+  modifiedAt: string;
+};
+
+export type FileListing = {
+  files: SharedFile[];
+  truncated: boolean;
+};
+
+export type DirEntry = {
+  name: string;
+  type: "file" | "dir";
+  size: number;
+  modifiedAt: string;
+};
+
+export type FileContent = { content: string } | { binary: true } | { tooLarge: true };
+
+export type PreviewMode = "static" | "node" | "none";
+export type PreviewStatus = "stopped" | "starting" | "running" | "error";
+
+export type PreviewState = {
+  mode: PreviewMode;
+  status: PreviewStatus;
+  url: string | null;
+  logTail: string[];
+  pid: number | null;
+};
+
+export type ConnectionKey = "anthropic" | "openrouter" | "github" | "postgres" | "slack" | "linear";
 
 export type ConnectionStatus = {
   key: ConnectionKey;

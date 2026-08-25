@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #0e0f14;
+    color: #e6e6ea;
+    font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  h1 {
+    font-size: 15px;
+    margin: 0 0 6px;
+  }
+  p {
+    color: #9a9aa5;
+    margin: 0 0 16px;
+  }
+  input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #2a2b35;
+    background: #17181f;
+    color: #e6e6ea;
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+  input:focus {
+    outline: none;
+    border-color: #5b5cff;
+  }
+  .row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  button {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #2a2b35;
+    background: #17181f;
+    color: #e6e6ea;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button.primary {
+    background: #5b5cff;
+    border-color: #5b5cff;
+    color: white;
+  }
+  #error {
+    color: #ff6b6b;
+    min-height: 16px;
+    margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+  <h1>Connect to Server</h1>
+  <p>Point Hivemark at a self-hosted server, or use the local backend on this machine.</p>
+  <input id="url" type="text" placeholder="https://hivemark.example.com" />
+  <div id="error"></div>
+  <div class="row">
+    <button id="useLocal">Use local backend</button>
+    <button id="connect" class="primary">Connect</button>
+  </div>
+
+  <script>
+    const input = document.getElementById("url");
+    const error = document.getElementById("error");
+    if (window.hivemark.backendUrl) input.value = window.hivemark.backendUrl;
+
+    document.getElementById("connect").addEventListener("click", () => {
+      const value = input.value.trim();
+      let parsed;
+      try {
+        parsed = new URL(value);
+      } catch {
+        error.textContent = "That doesn't look like a valid URL.";
+        return;
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        error.textContent = "URL must start with http:// or https://";
+        return;
+      }
+      window.hivemark.setServerUrl(value.replace(/\/$/, ""));
+    });
+
+    document.getElementById("useLocal").addEventListener("click", () => {
+      window.hivemark.useLocalServer();
+    });
+  </script>
+</body>
+</html>

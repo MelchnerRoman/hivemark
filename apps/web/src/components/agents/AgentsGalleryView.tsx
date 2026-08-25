@@ -172,6 +172,7 @@ export function AgentsGalleryView() {
                 {taskRoom && (
                   <p className="mt-1 truncate text-[11px] text-foreground-muted/80">
                     {room?.emoji} {taskRoom.emoji} {taskRoom.name}
+                    {agent.roomId && " · Room-wide"}
                   </p>
                 )}
               </div>

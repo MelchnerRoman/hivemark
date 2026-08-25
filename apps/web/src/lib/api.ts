@@ -9,20 +9,44 @@ import type {
   ConnectionKey,
   ConnectionStatus,
   DirectMessage,
+  DirEntry,
+  FileContent,
+  FileListing,
   Loop,
   McpTool,
   Member,
+  PreviewState,
   Room,
   TaskRoom,
   TaskRoomStatus,
   TodoItem,
   Workflow,
 } from "./types";
+import { clearToken, getToken } from "./auth";
 
-// The Hivemark backend (apps/server) always runs on localhost — in dev it's started
-// separately, in the packaged app Electron spawns it as a child process (see apps/desktop).
-const BACKEND_URL = "http://localhost:4001";
-const WS_URL = "ws://localhost:4001/ws";
+declare global {
+  interface Window {
+    /** Bridged from apps/desktop/src/preload.js — present only inside the
+     * Electron app, absent in a plain browser. */
+    hivemark?: {
+      backendUrl: string | null;
+      setServerUrl: (url: string) => Promise<void>;
+      useLocalServer: () => Promise<void>;
+    };
+  }
+}
+
+// Resolution order: (1) Electron's runtime-injected server URL (set via the
+// "Connect to Server…" menu, see apps/desktop) — lets one packaged desktop
+// build connect to any self-hosted server without a rebuild; (2) the
+// build-time NEXT_PUBLIC_BACKEND_URL for a self-hosted *web* deployment
+// (baked in by `next build`, each deployment needs its own build); (3) the
+// always-localhost default for local dev / Electron spawning its own backend.
+export const BACKEND_URL =
+  (typeof window !== "undefined" && window.hivemark?.backendUrl) ||
+  process.env.NEXT_PUBLIC_BACKEND_URL ||
+  "http://localhost:4001";
+const WS_URL = BACKEND_URL.replace(/^http/, "ws") + "/ws";
 
 export type BackendState = {
   members: Member[];
@@ -40,19 +64,41 @@ export type BackendState = {
   loops: Loop[];
   todos: TodoItem[];
   connections: ConnectionStatus[];
-  currentMemberId: string;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken();
   const res = await fetch(`${BACKEND_URL}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
   });
+  if (res.status === 401) clearToken();
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error ?? `Request failed: ${res.status}`);
   }
   return res.json() as Promise<T>;
+}
+
+// --- auth ---
+export function getAuthProviders(): Promise<{ providers: string[] }> {
+  return request("/api/auth/providers");
+}
+export function loginUrl(provider: string): string {
+  return `${BACKEND_URL}/api/auth/${provider}/login`;
+}
+export function exchangeAuthCode(code: string): Promise<{ token: string }> {
+  return request("/api/auth/exchange", { method: "POST", body: JSON.stringify({ code }) });
+}
+export function fetchMe(): Promise<Member> {
+  return request("/api/auth/me");
+}
+export function logout(): Promise<void> {
+  return request("/api/auth/session", { method: "DELETE" });
 }
 
 export function fetchState(): Promise<BackendState> {
@@ -79,7 +125,8 @@ export function connectSync(onSync: () => void): () => void {
   let closed = false;
 
   function connect() {
-    socket = new WebSocket(WS_URL);
+    const token = getToken();
+    socket = new WebSocket(token ? `${WS_URL}?token=${encodeURIComponent(token)}` : WS_URL);
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -112,6 +159,15 @@ export function addMemberToRoom(roomId: string, memberId: string): Promise<void>
 export function removeMemberFromRoom(roomId: string, memberId: string): Promise<void> {
   return request(`/api/rooms/${roomId}/members/${memberId}`, { method: "DELETE" });
 }
+export function addAgentToRoom(roomId: string, agentId: string): Promise<void> {
+  return request(`/api/rooms/${roomId}/agents`, { method: "POST", body: JSON.stringify({ agentId }) });
+}
+export function removeAgentFromRoom(roomId: string, agentId: string): Promise<void> {
+  return request(`/api/rooms/${roomId}/agents/${agentId}`, { method: "DELETE" });
+}
+export function addTeamToRoom(roomId: string, teamId: string): Promise<Agent[]> {
+  return request(`/api/rooms/${roomId}/agent-teams`, { method: "POST", body: JSON.stringify({ teamId }) });
+}
 
 // --- task rooms ---
 export function createTaskRoom(roomId: string, name: string, emoji: string): Promise<TaskRoom> {
@@ -128,6 +184,18 @@ export function sendMessage(taskRoomId: string, content: string): Promise<ChatMe
 export function sendDirectMessage(agentId: string, content: string): Promise<DirectMessage> {
   return request(`/api/agents/${agentId}/dm`, { method: "POST", body: JSON.stringify({ content }) });
 }
+export function editMessage(messageId: string, content: string): Promise<void> {
+  return request(`/api/messages/${messageId}`, { method: "PATCH", body: JSON.stringify({ content }) });
+}
+export function deleteMessage(messageId: string): Promise<void> {
+  return request(`/api/messages/${messageId}`, { method: "DELETE" });
+}
+export function editDirectMessage(dmId: string, content: string): Promise<void> {
+  return request(`/api/direct-messages/${dmId}`, { method: "PATCH", body: JSON.stringify({ content }) });
+}
+export function deleteDirectMessage(dmId: string): Promise<void> {
+  return request(`/api/direct-messages/${dmId}`, { method: "DELETE" });
+}
 
 // --- agents ---
 export function createAgent(params: {
@@ -143,6 +211,9 @@ export function createAgent(params: {
 }
 export function toggleAgentTool(agentId: string, toolId: string): Promise<void> {
   return request(`/api/agents/${agentId}/tools/${toolId}`, { method: "PATCH" });
+}
+export function updateAgentConfig(agentId: string, config: { model: string; runtimeId: string }): Promise<void> {
+  return request(`/api/agents/${agentId}/config`, { method: "PATCH", body: JSON.stringify(config) });
 }
 export function removeAgent(agentId: string): Promise<void> {
   return request(`/api/agents/${agentId}`, { method: "DELETE" });
@@ -224,4 +295,99 @@ export function setAgentBehaviorSetting<K extends keyof AgentBehaviorSettings>(
 }
 export function installRuntime(runtimeId: string): Promise<void> {
   return request(`/api/agent-runtimes/${runtimeId}/install`, { method: "POST" });
+}
+export function installMcpTool(toolId: string): Promise<void> {
+  return request(`/api/mcp-tools/${toolId}/install`, { method: "POST" });
+}
+
+// --- files ---
+export function listAgentFiles(agentId: string): Promise<FileListing> {
+  return request(`/api/agents/${agentId}/files`);
+}
+/** Downloads via fetch (not a plain `<a href>`) so the auth bearer token is
+ * sent — a bare link wouldn't carry it when real multi-user auth is on. */
+async function downloadViaUrl(url: string, suggestedName: string): Promise<void> {
+  const token = getToken();
+  const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = suggestedName;
+  a.click();
+  URL.revokeObjectURL(objectUrl);
+}
+export function downloadAgentFile(agentId: string, path: string): Promise<void> {
+  return downloadViaUrl(
+    `${BACKEND_URL}/api/agents/${agentId}/files/download?path=${encodeURIComponent(path)}`,
+    path.split("/").pop()!
+  );
+}
+
+// --- room project (the real, shared Finder) ---
+export function listRoomFiles(roomId: string, dirPath: string): Promise<DirEntry[]> {
+  return request(`/api/rooms/${roomId}/project/files?path=${encodeURIComponent(dirPath)}`);
+}
+export function getRoomFileContent(roomId: string, filePath: string): Promise<FileContent> {
+  return request(`/api/rooms/${roomId}/project/files/content?path=${encodeURIComponent(filePath)}`);
+}
+export function downloadRoomFile(roomId: string, filePath: string): Promise<void> {
+  return downloadViaUrl(
+    `${BACKEND_URL}/api/rooms/${roomId}/project/files/download?path=${encodeURIComponent(filePath)}`,
+    filePath.split("/").pop()!
+  );
+}
+export function createRoomFile(roomId: string, targetPath: string, type: "file" | "dir"): Promise<void> {
+  return request(`/api/rooms/${roomId}/project/files`, {
+    method: "POST",
+    body: JSON.stringify({ path: targetPath, type }),
+  });
+}
+export function deleteRoomFile(roomId: string, targetPath: string): Promise<void> {
+  return request(`/api/rooms/${roomId}/project/files?path=${encodeURIComponent(targetPath)}`, { method: "DELETE" });
+}
+export function renameRoomFile(roomId: string, from: string, to: string): Promise<void> {
+  return request(`/api/rooms/${roomId}/project/files`, { method: "PATCH", body: JSON.stringify({ from, to }) });
+}
+
+// --- room preview ---
+export function getPreviewStatus(roomId: string): Promise<PreviewState> {
+  return request(`/api/rooms/${roomId}/preview/status`);
+}
+export function startRoomPreview(roomId: string): Promise<PreviewState> {
+  return request(`/api/rooms/${roomId}/preview/start`, { method: "POST" });
+}
+export function stopRoomPreview(roomId: string): Promise<PreviewState> {
+  return request(`/api/rooms/${roomId}/preview/stop`, { method: "POST" });
+}
+/** The status route returns a same-origin path for static rooms
+ * ("/preview-static/<id>/"), or for a live node dev server a `proxy://<port>/`
+ * marker — the server proxies the dev server's raw bytes (HTTP + WebSocket
+ * HMR) through a TCP forward on that port, so we just need to swap in
+ * whatever host we're already using to reach BACKEND_URL. That makes live
+ * previews work in self-hosted/remote deployments the same way the REST API
+ * already does, not just when the viewer is on the same machine as the
+ * server. */
+export function resolvePreviewUrl(url: string): string {
+  if (url.startsWith("proxy://")) {
+    const port = url.slice("proxy://".length).split("/")[0];
+    return `http://${new URL(BACKEND_URL).hostname}:${port}/`;
+  }
+  return url.startsWith("/") ? `${BACKEND_URL}${url}` : url;
+}
+
+export type ClaudeCodeAuthStatus = {
+  available: boolean;
+  loggedIn: boolean;
+  email?: string;
+  subscriptionType?: string;
+};
+
+export function getClaudeCodeAuthStatus(): Promise<ClaudeCodeAuthStatus> {
+  return request("/api/runtimes/claude-code/status");
+}
+
+export function triggerClaudeCodeLogin(): Promise<void> {
+  return request("/api/runtimes/claude-code/login", { method: "POST" });
 }

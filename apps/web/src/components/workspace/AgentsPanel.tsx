@@ -7,6 +7,9 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { CreateAgentModal } from "@/components/modals/CreateAgentModal";
+import { RuntimeSelect } from "@/components/agents/RuntimeSelect";
+import { ModelInput } from "@/components/agents/ModelInput";
+import type { Agent } from "@/lib/types";
 
 const statusTone: Record<string, "neutral" | "brand" | "danger"> = {
   idle: "neutral",
@@ -14,8 +17,12 @@ const statusTone: Record<string, "neutral" | "brand" | "danger"> = {
   error: "danger",
 };
 
+const BASH_ACCESS_TOOL_ID = "bash-access";
+const BASH_CAPABLE_RUNTIMES = ["runtime-claude-code", "runtime-codex"];
+
 export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
-  const agents = useStore(useShallow((s) => s.agents.filter((a) => a.taskRoomId === taskRoomId)));
+  const agents = useStore(useShallow((s) => s.agents));
+  const taskRooms = useStore((s) => s.taskRooms);
   const mcpTools = useStore((s) => s.mcpTools);
   const members = useStore((s) => s.members);
   const toggleAgentTool = useStore((s) => s.toggleAgentTool);
@@ -23,12 +30,13 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
   const runAgent = useStore((s) => s.runAgent);
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
 
   return (
     <div className="h-full overflow-y-auto px-6 py-4">
       <div className="mb-5 flex items-center justify-between">
         <p className="text-sm text-foreground-muted">
-          Agents created here only act within this task room, using tools your team grants them.
+          Every agent is available here — @mention one in chat to bring it in.
         </p>
         <Button onClick={() => setCreateOpen(true)}>New agent</Button>
       </div>
@@ -36,6 +44,8 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
       <div className="space-y-4">
         {agents.map((agent) => {
           const creator = members.find((m) => m.id === agent.createdById);
+          const isHome = agent.taskRoomId === taskRoomId;
+          const homeTaskRoom = taskRooms.find((t) => t.id === agent.taskRoomId);
           return (
             <div key={agent.id} className="rounded-xl border border-border bg-surface p-4">
               <div className="flex items-start justify-between">
@@ -48,6 +58,14 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                     </div>
                     <p className="text-xs text-foreground-muted">
                       {agent.model} · Created by {creator?.name ?? "someone"}
+                      {!isHome && homeTaskRoom && ` · Home: ${homeTaskRoom.emoji} ${homeTaskRoom.name}`}
+                      {" · "}
+                      <button
+                        onClick={() => setEditingAgentId(editingAgentId === agent.id ? null : agent.id)}
+                        className="text-brand hover:underline"
+                      >
+                        {editingAgentId === agent.id ? "Cancel" : "Edit runtime/model"}
+                      </button>
                     </p>
                   </div>
                 </div>
@@ -60,14 +78,21 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                   >
                     {agent.status === "running" ? "Running…" : "Run agent"}
                   </Button>
-                  <button
-                    onClick={() => removeAgent(agent.id)}
-                    className="text-xs text-foreground-muted hover:text-danger"
-                  >
-                    Remove
-                  </button>
+                  {isHome && (
+                    <button
+                      onClick={() => removeAgent(agent.id)}
+                      className="text-xs text-foreground-muted hover:text-danger"
+                      title="Delete this agent"
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
               </div>
+
+              {editingAgentId === agent.id && (
+                <AgentConfigEditor agent={agent} onDone={() => setEditingAgentId(null)} />
+              )}
 
               {agent.instructions && (
                 <p className="mt-3 text-sm text-foreground-muted">{agent.instructions}</p>
@@ -82,6 +107,18 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                     const granted = agent.grants.some((g) => g.toolId === tool.id);
                     const key = `${agent.id}:${tool.id}`;
                     const isExpanded = expandedTool === key;
+                    const grantTool = () => {
+                      if (
+                        granted ||
+                        tool.id !== "mcp-preview" ||
+                        window.confirm(
+                          `This lets ${agent.name} run a real npm install + dev server on this machine, confined to this room's project folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`
+                        )
+                      ) {
+                        toggleAgentTool(agent.id, tool.id);
+                      }
+                      setExpandedTool(null);
+                    };
                     return (
                       <div key={tool.id} className="relative">
                         <div
@@ -91,13 +128,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                               : "border-border text-foreground-muted hover:bg-surface-raised"
                           }`}
                         >
-                          <button
-                            onClick={() => {
-                              toggleAgentTool(agent.id, tool.id);
-                              setExpandedTool(null);
-                            }}
-                            title={tool.description}
-                          >
+                          <button onClick={grantTool} title={tool.description}>
                             {granted ? "✓ " : "+ "}
                             {tool.name}
                           </button>
@@ -116,14 +147,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                         {isExpanded && (
                           <div className="absolute left-0 top-full z-10 mt-1 w-56 rounded-lg border border-border bg-surface p-2.5 text-xs text-foreground-muted shadow-xl">
                             <p className="mb-2">{tool.description}</p>
-                            <Button
-                              variant="secondary"
-                              className="w-full text-xs"
-                              onClick={() => {
-                                toggleAgentTool(agent.id, tool.id);
-                                setExpandedTool(null);
-                              }}
-                            >
+                            <Button variant="secondary" className="w-full text-xs" onClick={grantTool}>
                               Grant access
                             </Button>
                           </div>
@@ -133,18 +157,82 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                   })}
                 </div>
               </div>
+
+              {BASH_CAPABLE_RUNTIMES.includes(agent.runtimeId) && (
+                <div className="mt-3">
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-foreground-muted">
+                    Shell &amp; file access
+                  </p>
+                  {(() => {
+                    const granted = agent.grants.some((g) => g.toolId === BASH_ACCESS_TOOL_ID);
+                    return (
+                      <button
+                        onClick={() => {
+                          if (
+                            granted ||
+                            window.confirm(
+                              `This lets ${agent.name} run real shell commands and edit files on this machine, confined to its own workspace folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`
+                            )
+                          ) {
+                            toggleAgentTool(agent.id, BASH_ACCESS_TOOL_ID);
+                          }
+                        }}
+                        className={`rounded-full border py-1 px-2.5 text-xs font-medium transition-colors ${
+                          granted
+                            ? "border-danger/40 bg-danger-soft text-danger"
+                            : "border-border text-foreground-muted hover:bg-surface-raised"
+                        }`}
+                      >
+                        {granted ? "✓ Bash access granted" : "+ Grant Bash access"}
+                      </button>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           );
         })}
 
         {agents.length === 0 && (
           <p className="pt-10 text-center text-sm text-foreground-muted">
-            No agents in this task room yet. Create one and grant it MCP tools to get started.
+            No agents yet. Create one and grant it MCP tools to get started.
           </p>
         )}
       </div>
 
       <CreateAgentModal open={createOpen} onClose={() => setCreateOpen(false)} taskRoomId={taskRoomId} />
+    </div>
+  );
+}
+
+function AgentConfigEditor({ agent, onDone }: { agent: Agent; onDone: () => void }) {
+  const updateAgentConfig = useStore((s) => s.updateAgentConfig);
+  const [runtimeId, setRuntimeId] = useState(agent.runtimeId);
+  const [model, setModel] = useState(agent.model);
+
+  function handleRuntimeChange(nextRuntimeId: string) {
+    const switchingToOpenRouter = nextRuntimeId === "runtime-openrouter" && runtimeId !== "runtime-openrouter";
+    const switchingAwayFromOpenRouter = runtimeId === "runtime-openrouter" && nextRuntimeId !== "runtime-openrouter";
+    setRuntimeId(nextRuntimeId);
+    if (switchingToOpenRouter) setModel("");
+    else if (switchingAwayFromOpenRouter) setModel("Claude Sonnet 5");
+  }
+
+  function handleSave() {
+    updateAgentConfig(agent.id, model, runtimeId);
+    onDone();
+  }
+
+  return (
+    <div className="mt-3 space-y-3 rounded-lg border border-border bg-surface-raised p-3">
+      <RuntimeSelect value={runtimeId} onChange={handleRuntimeChange} />
+      <ModelInput runtimeId={runtimeId} value={model} onChange={setModel} />
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" onClick={onDone}>
+          Cancel
+        </Button>
+        <Button onClick={handleSave}>Save</Button>
+      </div>
     </div>
   );
 }

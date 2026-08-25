@@ -6,6 +6,7 @@
     "apps/*"
   ],
   "scripts": {
+    "dev": "trap 'kill 0' EXIT; npm run dev --workspace=server & npm run dev --workspace=web & wait",
     "dev:web": "npm run dev --workspace=web",
     "dev:desktop": "npm run dev --workspace=desktop",
     "build:web": "npm run build --workspace=web",

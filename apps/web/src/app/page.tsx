@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
-import { connectSync } from "@/lib/api";
+import { connectSync, exchangeAuthCode } from "@/lib/api";
+import { setToken } from "@/lib/auth";
+import { LoginScreen } from "@/components/auth/LoginScreen";
 import { RoomSidebar } from "@/components/nav/RoomSidebar";
 import { TaskRoomList } from "@/components/nav/TaskRoomList";
 import { TaskRoomWorkspace } from "@/components/workspace/TaskRoomWorkspace";
@@ -12,18 +14,58 @@ import { DirectMessageView } from "@/components/agents/DirectMessageView";
 export default function Home() {
   const view = useStore((s) => s.view);
   const hydrate = useStore((s) => s.hydrate);
+  const loadMe = useStore((s) => s.loadMe);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [needsLogin, setNeedsLogin] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
-    hydrate()
-      .then(() => setLoaded(true))
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
-    const disconnect = connectSync(() => {
-      hydrate().catch((err) => setError(err instanceof Error ? err.message : String(err)));
-    });
-    return disconnect;
-  }, [hydrate]);
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+
+    let disconnect: (() => void) | null = null;
+
+    async function boot() {
+      // Handoff from the OAuth callback redirect: a one-time code (never the
+      // real session token — that stays out of the URL/history/logs) to
+      // exchange for the actual bearer token.
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get("code");
+      const oauthError = url.searchParams.get("authError");
+      if (code || oauthError) {
+        url.searchParams.delete("code");
+        url.searchParams.delete("authError");
+        window.history.replaceState({}, "", url.toString());
+      }
+      if (oauthError) setAuthError(oauthError);
+      if (code) {
+        const { token } = await exchangeAuthCode(code);
+        setToken(token);
+      }
+
+      try {
+        await loadMe();
+      } catch {
+        setNeedsLogin(true);
+        return;
+      }
+
+      await hydrate();
+      setLoaded(true);
+      disconnect = connectSync(() => {
+        hydrate().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      });
+    }
+
+    boot().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    return () => disconnect?.();
+  }, [hydrate, loadMe]);
+
+  if (needsLogin) {
+    return <LoginScreen authError={authError} />;
+  }
 
   if (error) {
     return (

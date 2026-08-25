@@ -5,41 +5,10 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/lib/store";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import type { Loop } from "@/lib/types";
 
 function formatDate(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-const MOCK_OUTCOMES = [
-  "OK",
-  "OK",
-  "3 events found",
-  "1 event found",
-  "No changes",
-  "5 events found",
-  "Skipped — no new data",
-];
-
-function hashString(value: string): number {
-  let hash = 0;
-  for (let i = 0; i < value.length; i++) {
-    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
-  }
-  return hash;
-}
-
-/** Deterministic mock run history — not persisted, just derived from the loop id so it's stable across renders. */
-function mockRunHistory(loop: Loop): { timestamp: string; outcome: string }[] {
-  const base = loop.lastRun ? new Date(loop.lastRun).getTime() : Date.now();
-  const dayMs = 24 * 60 * 60 * 1000;
-  return [0, 1, 2].map((i) => {
-    const seed = hashString(`${loop.id}-run-${i}`);
-    const outcome = MOCK_OUTCOMES[seed % MOCK_OUTCOMES.length];
-    const timestamp = new Date(base - i * dayMs).toISOString();
-    return { timestamp, outcome };
-  });
 }
 
 export function LoopsPanel({ taskRoomId }: { taskRoomId: string }) {
@@ -49,12 +18,16 @@ export function LoopsPanel({ taskRoomId }: { taskRoomId: string }) {
   const removeLoop = useStore((s) => s.removeLoop);
   const [name, setName] = useState("");
   const [schedule, setSchedule] = useState("Every day at 09:00");
+  const [customSchedule, setCustomSchedule] = useState("");
+  const isCustom = schedule === "custom";
 
   function handleCreate(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim()) return;
-    createLoop(taskRoomId, name.trim(), schedule);
+    const finalSchedule = isCustom ? customSchedule.trim() : schedule;
+    if (!name.trim() || !finalSchedule) return;
+    createLoop(taskRoomId, name.trim(), finalSchedule);
     setName("");
+    setCustomSchedule("");
   }
 
   return (
@@ -74,16 +47,25 @@ export function LoopsPanel({ taskRoomId }: { taskRoomId: string }) {
           <option>Every 15 minutes</option>
           <option>Every hour</option>
           <option>Every day at 09:00</option>
+          <option>Every 7 days</option>
           <option>Every Monday at 09:00</option>
+          <option value="custom">Custom (cron expression)…</option>
         </select>
-        <Button type="submit" disabled={!name.trim()}>
+        {isCustom && (
+          <input
+            value={customSchedule}
+            onChange={(e) => setCustomSchedule(e.target.value)}
+            placeholder="e.g. 0 9 * * 1-5"
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono outline-none focus:border-brand"
+          />
+        )}
+        <Button type="submit" disabled={!name.trim() || (isCustom && !customSchedule.trim())}>
           Create loop
         </Button>
       </form>
 
       <div className="space-y-3">
         {loops.map((loop) => {
-          const history = mockRunHistory(loop);
           return (
             <div key={loop.id} className="rounded-xl border border-border bg-surface p-4">
               <div className="flex items-center justify-between">
@@ -110,23 +92,21 @@ export function LoopsPanel({ taskRoomId }: { taskRoomId: string }) {
                 </div>
               </div>
 
-              <div className="mt-3 border-t border-border pt-2">
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-foreground-muted">
-                  Recent runs
-                </p>
-                <ul className="space-y-1">
-                  {history.map((run, i) => (
-                    <li key={i} className="flex items-center justify-between text-xs text-foreground-muted">
-                      <span>{formatDate(run.timestamp)}</span>
-                      <span
-                        className={run.outcome === "OK" ? "text-accent" : "text-foreground-muted"}
-                      >
-                        {run.outcome}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              {loop.runs.length > 0 && (
+                <div className="mt-3 border-t border-border pt-2">
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-foreground-muted">
+                    Recent runs
+                  </p>
+                  <ul className="space-y-1">
+                    {loop.runs.map((run, i) => (
+                      <li key={i} className="flex items-center justify-between text-xs text-foreground-muted">
+                        <span>{formatDate(run.timestamp)}</span>
+                        <span>{run.outcome}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           );
         })}

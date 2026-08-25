@@ -9,6 +9,8 @@ import { WorkflowsPanel } from "./WorkflowsPanel";
 import { LoopsPanel } from "./LoopsPanel";
 import { TodosPanel } from "./TodosPanel";
 import { AgentsPanel } from "./AgentsPanel";
+import { FilesPanel } from "./FilesPanel";
+import { PreviewPanel } from "./PreviewPanel";
 
 const TABS: { id: WorkspaceTab; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: "💬" },
@@ -16,6 +18,8 @@ const TABS: { id: WorkspaceTab; label: string; icon: string }[] = [
   { id: "loops", label: "Loops", icon: "🔁" },
   { id: "todos", label: "Todos", icon: "☑️" },
   { id: "agents", label: "Agents", icon: "🤖" },
+  { id: "files", label: "Files", icon: "📁" },
+  { id: "preview", label: "Preview", icon: "🌐" },
 ];
 
 const statusTone: Record<string, "neutral" | "brand" | "accent"> = {
@@ -49,7 +53,6 @@ export function TaskRoomWorkspace() {
   }
 
   const assignees = members.filter((m) => taskRoom.memberIds.includes(m.id));
-  const taskAgents = agents.filter((a) => a.taskRoomId === taskRoom.id);
   const taskWorkflows = workflows.filter((w) => w.taskRoomId === taskRoom.id);
   const taskLoops = loops.filter((l) => l.taskRoomId === taskRoom.id);
   const taskTodos = todos.filter((t) => t.taskRoomId === taskRoom.id);
@@ -59,7 +62,9 @@ export function TaskRoomWorkspace() {
     workflows: taskWorkflows.length || null,
     loops: taskLoops.length || null,
     todos: taskTodos.filter((t) => !t.done).length || null,
-    agents: taskAgents.length || null,
+    agents: agents.length || null,
+    files: null,
+    preview: null,
   };
 
   return (
@@ -108,6 +113,8 @@ export function TaskRoomWorkspace() {
         {activeTab === "loops" && <LoopsPanel taskRoomId={taskRoom.id} />}
         {activeTab === "todos" && <TodosPanel taskRoomId={taskRoom.id} />}
         {activeTab === "agents" && <AgentsPanel taskRoomId={taskRoom.id} />}
+        {activeTab === "files" && <FilesPanel roomId={taskRoom.roomId} />}
+        {activeTab === "preview" && <PreviewPanel roomId={taskRoom.roomId} />}
       </div>
     </div>
   );

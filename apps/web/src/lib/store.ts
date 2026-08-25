@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import * as api from "./api";
+import { clearToken } from "./auth";
 import type {
   Agent,
   AgentBehaviorSettings,
@@ -23,6 +24,34 @@ import type {
 
 function tempId(prefix: string) {
   return `tmp-${prefix}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+let hasHydratedOnce = false;
+
+/** Fires a real desktop notification for agent messages that just arrived while
+ * this window wasn't focused. Skipped on the very first hydrate (app boot) so
+ * loading history doesn't trigger a notification storm. */
+function notifyNewAgentMessages(
+  before: { messages: ChatMessage[]; directMessages: DirectMessage[] },
+  after: { messages: ChatMessage[]; directMessages: DirectMessage[]; agents: Agent[] }
+) {
+  if (!hasHydratedOnce) return;
+  if (typeof window === "undefined" || typeof Notification === "undefined") return;
+  if (Notification.permission !== "granted") return;
+  if (document.hasFocus()) return;
+
+  const knownIds = new Set([...before.messages.map((m) => m.id), ...before.directMessages.map((m) => m.id)]);
+
+  for (const m of after.messages) {
+    if (m.authorType !== "agent" || knownIds.has(m.id)) continue;
+    const agent = after.agents.find((a) => a.id === m.authorId);
+    new Notification(agent?.name ?? "Agent", { body: m.content.slice(0, 200) });
+  }
+  for (const m of after.directMessages) {
+    if (m.authorType !== "agent" || knownIds.has(m.id)) continue;
+    const agent = after.agents.find((a) => a.id === m.agentId);
+    new Notification(agent ? `${agent.name} (DM)` : "Agent", { body: m.content.slice(0, 200) });
+  }
 }
 
 const DEFAULT_AGENT_DEFAULTS: AgentDefaults = {
@@ -60,6 +89,11 @@ type Store = {
   agentDefaults: AgentDefaults;
 
   hydrate: () => Promise<void>;
+  /** Populates currentMemberId from /api/auth/me — called once on boot (see
+   * page.tsx's login gate), separately from hydrate() since identity now
+   * comes from the authenticated session, not the general state payload. */
+  loadMe: () => Promise<void>;
+  logout: () => Promise<void>;
 
   selectRoom: (roomId: string) => void;
   selectTaskRoom: (taskRoomId: string) => void;
@@ -71,15 +105,23 @@ type Store = {
   setAgentDefaults: (defaults: AgentDefaults) => void;
   setAgentBehaviorSetting: <K extends keyof AgentBehaviorSettings>(key: K, value: AgentBehaviorSettings[K]) => void;
   installRuntime: (runtimeId: string) => void;
+  installMcpTool: (toolId: string) => Promise<void>;
 
   createRoom: (name: string, emoji: string) => void;
   createTaskRoom: (roomId: string, name: string, emoji: string) => void;
   addMemberToRoom: (roomId: string, memberId: string) => void;
   removeMemberFromRoom: (roomId: string, memberId: string) => void;
+  addAgentToRoom: (roomId: string, agentId: string) => void;
+  removeAgentFromRoom: (roomId: string, agentId: string) => void;
+  addTeamToRoom: (roomId: string, teamId: string) => void;
   setTaskRoomStatus: (taskRoomId: string, status: TaskRoomStatus) => void;
 
   sendMessage: (taskRoomId: string, content: string) => void;
   sendDirectMessage: (agentId: string, content: string) => void;
+  editMessage: (messageId: string, content: string) => void;
+  deleteMessage: (messageId: string) => void;
+  editDirectMessage: (dmId: string, content: string) => void;
+  deleteDirectMessage: (dmId: string) => void;
 
   createAgent: (
     taskRoomId: string,
@@ -91,6 +133,7 @@ type Store = {
     runtimeId: string
   ) => void;
   toggleAgentTool: (agentId: string, toolId: string) => void;
+  updateAgentConfig: (agentId: string, model: string, runtimeId: string) => void;
   removeAgent: (agentId: string) => void;
   runAgent: (agentId: string) => void;
   stopAgent: (agentId: string) => void;
@@ -139,6 +182,12 @@ export const useStore = create<Store>((set, get) => ({
 
   hydrate: async () => {
     const state = await api.fetchState();
+    const before = get();
+    notifyNewAgentMessages(
+      { messages: before.messages, directMessages: before.directMessages },
+      { messages: state.messages, directMessages: state.directMessages, agents: state.agents }
+    );
+    hasHydratedOnce = true;
     set((s) => ({
       members: state.members,
       mcpTools: state.mcpTools,
@@ -154,11 +203,21 @@ export const useStore = create<Store>((set, get) => ({
       workflows: state.workflows,
       loops: state.loops,
       todos: state.todos,
-      currentMemberId: state.currentMemberId,
       selectedRoomId: s.selectedRoomId ?? state.rooms[0]?.id ?? null,
       selectedTaskRoomId:
         s.selectedTaskRoomId ?? state.taskRooms.find((t) => t.roomId === state.rooms[0]?.id)?.id ?? null,
     }));
+  },
+
+  loadMe: async () => {
+    const me = await api.fetchMe();
+    set({ currentMemberId: me.id });
+  },
+
+  logout: async () => {
+    await api.logout().catch(() => {});
+    clearToken();
+    window.location.reload();
   },
 
   selectRoom: (roomId) => {
@@ -194,10 +253,20 @@ export const useStore = create<Store>((set, get) => ({
     api.setAgentBehaviorSetting(key, value).then(() => get().hydrate());
   },
   installRuntime: (runtimeId) => {
-    set((s) => ({
-      agentRuntimes: s.agentRuntimes.map((r) => (r.id === runtimeId ? { ...r, status: "ready" } : r)),
-    }));
-    api.installRuntime(runtimeId).then(() => get().hydrate());
+    // No optimistic update here — unlike most actions, this one has a real chance of
+    // failing (the CLI genuinely isn't installed), so wait for the actual result.
+    api
+      .installRuntime(runtimeId)
+      .then(() => get().hydrate())
+      .catch((err) => alert(err instanceof Error ? err.message : String(err)));
+  },
+  installMcpTool: async (toolId) => {
+    try {
+      await api.installMcpTool(toolId);
+      await get().hydrate();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
   },
 
   createRoom: (name, emoji) => {
@@ -219,7 +288,24 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   removeMemberFromRoom: (roomId, memberId) => {
-    api.removeMemberFromRoom(roomId, memberId).then(() => get().hydrate());
+    api
+      .removeMemberFromRoom(roomId, memberId)
+      .then(() => get().hydrate())
+      .catch((err) => alert(err instanceof Error ? err.message : String(err)));
+  },
+
+  addAgentToRoom: (roomId, agentId) => {
+    set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, roomId } : a)) }));
+    api.addAgentToRoom(roomId, agentId).then(() => get().hydrate());
+  },
+
+  removeAgentFromRoom: (roomId, agentId) => {
+    set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, roomId: null } : a)) }));
+    api.removeAgentFromRoom(roomId, agentId).then(() => get().hydrate());
+  },
+
+  addTeamToRoom: (roomId, teamId) => {
+    api.addTeamToRoom(roomId, teamId).then(() => get().hydrate());
   },
 
   setTaskRoomStatus: (taskRoomId, status) => {
@@ -235,6 +321,7 @@ export const useStore = create<Store>((set, get) => ({
       authorId: get().currentMemberId,
       content,
       createdAt: new Date().toISOString(),
+      editedAt: null,
     };
     set((s) => ({ messages: [...s.messages, optimistic] }));
     api.sendMessage(taskRoomId, content).then(() => get().hydrate());
@@ -247,9 +334,38 @@ export const useStore = create<Store>((set, get) => ({
       authorType: "member",
       content,
       createdAt: new Date().toISOString(),
+      editedAt: null,
     };
     set((s) => ({ directMessages: [...s.directMessages, optimistic] }));
     api.sendDirectMessage(agentId, content).then(() => get().hydrate());
+  },
+
+  editMessage: (messageId, content) => {
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === messageId ? { ...m, content, editedAt: new Date().toISOString() } : m
+      ),
+    }));
+    api.editMessage(messageId, content).then(() => get().hydrate()).catch((err) => alert(err instanceof Error ? err.message : String(err)));
+  },
+
+  deleteMessage: (messageId) => {
+    set((s) => ({ messages: s.messages.filter((m) => m.id !== messageId) }));
+    api.deleteMessage(messageId).then(() => get().hydrate()).catch((err) => alert(err instanceof Error ? err.message : String(err)));
+  },
+
+  editDirectMessage: (dmId, content) => {
+    set((s) => ({
+      directMessages: s.directMessages.map((m) =>
+        m.id === dmId ? { ...m, content, editedAt: new Date().toISOString() } : m
+      ),
+    }));
+    api.editDirectMessage(dmId, content).then(() => get().hydrate()).catch((err) => alert(err instanceof Error ? err.message : String(err)));
+  },
+
+  deleteDirectMessage: (dmId) => {
+    set((s) => ({ directMessages: s.directMessages.filter((m) => m.id !== dmId) }));
+    api.deleteDirectMessage(dmId).then(() => get().hydrate()).catch((err) => alert(err instanceof Error ? err.message : String(err)));
   },
 
   createAgent: (taskRoomId, name, instructions, color, avatarEmoji, model, runtimeId) => {
@@ -272,6 +388,11 @@ export const useStore = create<Store>((set, get) => ({
       }),
     }));
     api.toggleAgentTool(agentId, toolId).then(() => get().hydrate());
+  },
+
+  updateAgentConfig: (agentId, model, runtimeId) => {
+    set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, model, runtimeId } : a)) }));
+    api.updateAgentConfig(agentId, { model, runtimeId }).then(() => get().hydrate());
   },
 
   removeAgent: (agentId) => {

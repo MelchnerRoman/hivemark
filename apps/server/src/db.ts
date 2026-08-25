@@ -1,6 +1,9 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { decryptSecret, encryptSecret, isEncrypted } from "./crypto.js";
+import { AUTH_ENABLED } from "./authConfig.js";
+import { randomBytes } from "node:crypto";
 import type {
   Agent,
   AgentBehaviorSettings,
@@ -15,6 +18,7 @@ import type {
   ConnectionStatus,
   DirectMessage,
   Loop,
+  LoopRun,
   McpTool,
   Member,
   Room,
@@ -81,7 +85,8 @@ CREATE TABLE IF NOT EXISTS messages (
   author_id TEXT NOT NULL,
   content TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  mentioned_agent_ids TEXT NOT NULL DEFAULT '[]'
+  mentioned_agent_ids TEXT NOT NULL DEFAULT '[]',
+  edited_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS direct_messages (
@@ -89,12 +94,14 @@ CREATE TABLE IF NOT EXISTS direct_messages (
   agent_id TEXT NOT NULL,
   author_type TEXT NOT NULL,
   content TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  edited_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS agents (
   id TEXT PRIMARY KEY,
   task_room_id TEXT NOT NULL,
+  room_id TEXT,
   name TEXT NOT NULL,
   color TEXT NOT NULL,
   avatar_emoji TEXT NOT NULL,
@@ -164,23 +171,172 @@ CREATE TABLE IF NOT EXISTS agent_behavior_settings (
   keep_awake_while_agents_active INTEGER NOT NULL DEFAULT 0
 );
 
--- Credentials. Values are stored in plaintext in this local sqlite file —
--- there is no encryption-at-rest here. Acceptable for a local-first desktop
--- app with a single user, but never expose this table's contents over the API.
+-- Credentials. Values are encrypted at rest (see crypto.ts) with a key kept
+-- in a separate 0600 file next to this database. Never expose this table's
+-- contents over the API.
 CREATE TABLE IF NOT EXISTS connections (
   key TEXT PRIMARY KEY,
   value TEXT,
   updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS oauth_identities (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  provider_user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(provider, provider_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
 `);
 
+// Migration for DBs created before `agents.room_id` existed — CREATE TABLE IF
+// NOT EXISTS above only applies to a fresh install, so existing tables need an
+// explicit ALTER. Safe to run every boot: guarded on the column already existing.
+{
+  const agentCols = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+  if (!agentCols.some((c) => c.name === "room_id")) {
+    db.exec("ALTER TABLE agents ADD COLUMN room_id TEXT");
+  }
+}
+
+// Codex doesn't actually need a separate install step (it's fetched on demand via
+// npx) — correct any DB seeded before this was realized, where it was marked
+// "cli_needed" and required a click through a non-functional "Install" button.
+db.prepare("UPDATE agent_runtimes SET status = 'ready' WHERE id = 'runtime-codex' AND status = 'cli_needed'").run();
+
+// Files / Preview MCP tools — added after mcp_tools could already be seeded,
+// so a fresh seedCatalog() run won't fire on existing DBs. UPDATE covers a
+// description change after a row already existed on a live DB (e.g.
+// mcp-filesystem's description changed when its shared folder became
+// Room-scoped instead of one global bucket).
+const FILESYSTEM_DESC = "Create files in a private workspace, or the Room's shared project folder";
+db.prepare("INSERT OR IGNORE INTO mcp_tools (id, name, description, icon) VALUES ('mcp-filesystem', 'Files', ?, 'folder')").run(
+  FILESYSTEM_DESC
+);
+db.prepare("UPDATE mcp_tools SET description = ? WHERE id = 'mcp-filesystem'").run(FILESYSTEM_DESC);
+
+db.prepare("INSERT OR IGNORE INTO mcp_tools (id, name, description, icon) VALUES ('mcp-preview', 'Preview', ?, 'globe')").run(
+  "Start/stop a live preview of the Room's project (npm run dev) so it can be checked in the app"
+);
+
+// Loop run history — added after loops could already exist, so a fresh CREATE
+// TABLE IF NOT EXISTS won't run against an existing DB file. This table itself
+// is new, so no ALTER is needed, just the guarded create below.
+db.exec(`
+CREATE TABLE IF NOT EXISTS loop_runs (
+  id TEXT PRIMARY KEY,
+  loop_id TEXT NOT NULL,
+  ran_at TEXT NOT NULL,
+  outcome TEXT NOT NULL
+);
+`);
+
+// Message editing — added after messages could already exist.
+for (const table of ["messages", "direct_messages"]) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === "edited_at")) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN edited_at TEXT`);
+  }
+}
+
+// Credential encryption — added after connections could already hold plaintext
+// values. Encrypts any row not already in our encrypted format in place.
+{
+  const rows = db.prepare("SELECT key, value FROM connections").all() as { key: string; value: string | null }[];
+  const reEncrypt = db.prepare("UPDATE connections SET value = ? WHERE key = ?");
+  for (const row of rows) {
+    if (row.value && !isEncrypted(row.value)) {
+      reEncrypt.run(encryptSecret(DATA_DIR, row.value), row.key);
+    }
+  }
+}
+
+// Real member auth — added after members/direct_messages could already exist.
+{
+  const memberCols = db.prepare("PRAGMA table_info(members)").all() as { name: string }[];
+  if (!memberCols.some((c) => c.name === "email")) db.exec("ALTER TABLE members ADD COLUMN email TEXT");
+  if (!memberCols.some((c) => c.name === "avatar_url")) db.exec("ALTER TABLE members ADD COLUMN avatar_url TEXT");
+}
+{
+  const dmCols = db.prepare("PRAGMA table_info(direct_messages)").all() as { name: string }[];
+  if (!dmCols.some((c) => c.name === "author_id")) {
+    db.exec("ALTER TABLE direct_messages ADD COLUMN author_id TEXT");
+  }
+}
+
+// Expired sessions are otherwise harmless (rejected at lookup) — a boot-time
+// sweep is enough, no need for a running timer.
+db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(nowIso());
+
 // ---------------------------------------------------------------------------
-// Seed (only runs once, when the members table is empty)
+// Seed
 // ---------------------------------------------------------------------------
 
-const CURRENT_MEMBER_ID = "m-roman";
+/** Identity used when auth is disabled (no OAuth provider configured) —
+ * every request behaves exactly as it always has, as this single member. */
+export const CURRENT_MEMBER_ID = "m-roman";
 
-function seedIfEmpty() {
+/** Catalog/config data the app needs to function — always seeded once,
+ * regardless of whether real auth is enabled. Gated on agent_runtimes being
+ * empty since, unlike the demo workspace data below, this has no dependency
+ * on members existing. */
+function seedCatalog() {
+  const count = (db.prepare("SELECT COUNT(*) as c FROM agent_runtimes").get() as { c: number }).c;
+  if (count > 0) return;
+
+  const insertTool = db.prepare("INSERT INTO mcp_tools (id, name, description, icon) VALUES (?,?,?,?)");
+  const mcpTools: McpTool[] = [
+    { id: "mcp-github", name: "GitHub", description: "Read/write repos, PRs, issues", icon: "code" },
+    { id: "mcp-linear", name: "Linear", description: "Create and update tickets", icon: "list" },
+    { id: "mcp-postgres", name: "Postgres", description: "Query the staging database", icon: "database" },
+    { id: "mcp-browser", name: "Browser", description: "Navigate and read web pages", icon: "globe" },
+    { id: "mcp-slack", name: "Slack Export", description: "Read message history for context", icon: "message" },
+    {
+      id: "mcp-filesystem",
+      name: "Files",
+      description: "Create files in a private workspace, or the Room's shared project folder",
+      icon: "folder",
+    },
+    {
+      id: "mcp-preview",
+      name: "Preview",
+      description: "Start/stop a live preview of the Room's project (npm run dev) so it can be checked in the app",
+      icon: "globe",
+    },
+  ];
+  for (const t of mcpTools) insertTool.run(t.id, t.name, t.description, t.icon);
+
+  const insertRuntime = db.prepare(
+    "INSERT INTO agent_runtimes (id, name, icon, status, description, install_hint, setup_url) VALUES (?,?,?,?,?,?,?)"
+  );
+  insertRuntime.run("runtime-hivemark", "Hivemark Agent", "🐝", "ready", "Runs natively inside Hivemark. No install needed.", null, null);
+  insertRuntime.run("runtime-claude-code", "Claude Code", "✳️", "ready", "Hivemark talks to Claude Code directly.", null, null);
+  insertRuntime.run("runtime-codex", "Codex", "⌨️", "ready", "Hivemark talks to the Codex CLI through an ACP adapter, fetched on demand via npx — no separate install needed. Needs Codex/OpenAI credentials configured on this machine.", null, "https://github.com/agentclientprotocol");
+  insertRuntime.run("runtime-goose", "Goose", "🦢", "cli_needed", "Hivemark talks to Goose through the Goose CLI.", null, "https://block.github.io/goose/");
+  insertRuntime.run("runtime-openrouter", "OpenRouter", "🌐", "ready", "Calls any model OpenRouter hosts (not just Claude) — type the model slug directly, e.g. openai/gpt-4o.", null, "https://openrouter.ai/keys");
+
+  db.prepare("INSERT INTO agent_defaults (id, model, runtime_id, instructions) VALUES (1, ?, ?, '')").run(
+    "Claude Sonnet 5",
+    "runtime-hivemark"
+  );
+  db.prepare(
+    "INSERT INTO agent_behavior_settings (id, keep_addressed_agents_active, keep_awake_while_agents_active) VALUES (1, 0, 0)"
+  ).run();
+}
+
+/** Fictional demo members/rooms/chat history — only seeded when auth is
+ * disabled (a real self-hosted deployment with real accounts shouldn't boot
+ * with 4 fake people and pre-written conversations). */
+function seedDemoWorkspace() {
+  if (AUTH_ENABLED) return;
   const count = (db.prepare("SELECT COUNT(*) as c FROM members").get() as { c: number }).c;
   if (count > 0) return;
 
@@ -194,16 +350,6 @@ function seedIfEmpty() {
     { id: "m-lea", name: "Lea Sander", initials: "LS", color: "#ff6b6b", role: "member" },
   ];
   for (const m of members) insertMember.run(m.id, m.name, m.initials, m.color, m.role);
-
-  const insertTool = db.prepare("INSERT INTO mcp_tools (id, name, description, icon) VALUES (?,?,?,?)");
-  const mcpTools: McpTool[] = [
-    { id: "mcp-github", name: "GitHub", description: "Read/write repos, PRs, issues", icon: "code" },
-    { id: "mcp-linear", name: "Linear", description: "Create and update tickets", icon: "list" },
-    { id: "mcp-postgres", name: "Postgres", description: "Query the staging database", icon: "database" },
-    { id: "mcp-browser", name: "Browser", description: "Navigate and read web pages", icon: "globe" },
-    { id: "mcp-slack", name: "Slack Export", description: "Read message history for context", icon: "message" },
-  ];
-  for (const t of mcpTools) insertTool.run(t.id, t.name, t.description, t.icon);
 
   const insertRoom = db.prepare(
     "INSERT INTO rooms (id, name, emoji, member_ids) VALUES (?,?,?,?)"
@@ -263,14 +409,6 @@ function seedIfEmpty() {
     JSON.stringify(["agent-onboarding-auditor", "agent-webhook-medic", "agent-copy-writer"])
   );
 
-  const insertRuntime = db.prepare(
-    "INSERT INTO agent_runtimes (id, name, icon, status, description, install_hint, setup_url) VALUES (?,?,?,?,?,?,?)"
-  );
-  insertRuntime.run("runtime-hivemark", "Hivemark Agent", "🐝", "ready", "Runs natively inside Hivemark. No install needed.", null, null);
-  insertRuntime.run("runtime-claude-code", "Claude Code", "✳️", "ready", "Hivemark talks to Claude Code directly.", null, null);
-  insertRuntime.run("runtime-codex", "Codex", "⌨️", "cli_needed", "Hivemark talks to the Codex CLI through an ACP adapter.", "npm install -g @agentclientprotocol/codex-acp", "https://github.com/agentclientprotocol");
-  insertRuntime.run("runtime-goose", "Goose", "🦢", "cli_needed", "Hivemark talks to Goose through the Goose CLI.", null, "https://block.github.io/goose/");
-
   const insertWorkflow = db.prepare(
     "INSERT INTO workflows (id, task_room_id, name, description, status, steps) VALUES (?,?,?,?,?,?)"
   );
@@ -297,30 +435,51 @@ function seedIfEmpty() {
   insertTodo.run("td-2", "tr-onboarding", "Update onboarding analytics events", 0, "m-jana", null);
   insertTodo.run("td-3", "tr-onboarding", "Write rollout announcement", 1, "m-jana", "2026-07-25");
   insertTodo.run("td-4", "tr-onboarding", "QA the redirect after signup", 0, null, "2026-08-05");
-
-  db.prepare("INSERT INTO agent_defaults (id, model, runtime_id, instructions) VALUES (1, ?, ?, '')").run(
-    "Claude Sonnet 5",
-    "runtime-hivemark"
-  );
-  db.prepare(
-    "INSERT INTO agent_behavior_settings (id, keep_addressed_agents_active, keep_awake_while_agents_active) VALUES (1, 0, 0)"
-  ).run();
 }
 
-seedIfEmpty();
+seedCatalog();
+seedDemoWorkspace();
 
 // ---------------------------------------------------------------------------
 // Row <-> domain-type mapping helpers
 // ---------------------------------------------------------------------------
 
-function rowToRoom(r: any): Room {
+function rowToMember(r: any): Member {
+  return {
+    id: r.id,
+    name: r.name,
+    initials: r.initials,
+    color: r.color,
+    role: r.role,
+    email: r.email ?? undefined,
+    avatarUrl: r.avatar_url ?? undefined,
+  };
+}
+
+function rowToRoom(r: any, taskRoomIdsByRoom?: Map<string, string[]>): Room {
   return {
     id: r.id,
     name: r.name,
     emoji: r.emoji,
     memberIds: JSON.parse(r.member_ids),
-    taskRoomIds: (db.prepare("SELECT id FROM task_rooms WHERE room_id = ?").all(r.id) as any[]).map((t) => t.id),
+    taskRoomIds: taskRoomIdsByRoom
+      ? (taskRoomIdsByRoom.get(r.id) ?? [])
+      : (db.prepare("SELECT id FROM task_rooms WHERE room_id = ?").all(r.id) as any[]).map((t) => t.id),
   };
+}
+
+/** Batched alternative to mapping rowToRoom one-by-one (each of which would
+ * otherwise run its own task_rooms query) — used by getState() where every
+ * room is fetched at once anyway. */
+function taskRoomIdsByRoom(): Map<string, string[]> {
+  const rows = db.prepare("SELECT id, room_id FROM task_rooms").all() as { id: string; room_id: string }[];
+  const byRoom = new Map<string, string[]>();
+  for (const t of rows) {
+    const list = byRoom.get(t.room_id);
+    if (list) list.push(t.id);
+    else byRoom.set(t.room_id, [t.id]);
+  }
+  return byRoom;
 }
 
 function rowToTaskRoom(r: any): TaskRoom {
@@ -343,6 +502,7 @@ function rowToMessage(r: any): ChatMessage {
     content: r.content,
     createdAt: r.created_at,
     mentionedAgentIds: JSON.parse(r.mentioned_agent_ids),
+    editedAt: r.edited_at ?? null,
   };
 }
 
@@ -351,8 +511,10 @@ function rowToDm(r: any): DirectMessage {
     id: r.id,
     agentId: r.agent_id,
     authorType: r.author_type,
+    authorId: r.author_id ?? null,
     content: r.content,
     createdAt: r.created_at,
+    editedAt: r.edited_at ?? null,
   };
 }
 
@@ -360,6 +522,7 @@ function rowToAgent(r: any): Agent {
   return {
     id: r.id,
     taskRoomId: r.task_room_id,
+    roomId: r.room_id ?? null,
     name: r.name,
     color: r.color,
     avatarEmoji: r.avatar_emoji,
@@ -399,7 +562,15 @@ function rowToWorkflow(r: any): Workflow {
   };
 }
 
-function rowToLoop(r: any): Loop {
+function getLoopRuns(loopId: string): LoopRun[] {
+  return (
+    db
+      .prepare("SELECT ran_at, outcome FROM loop_runs WHERE loop_id = ? ORDER BY ran_at DESC LIMIT 5")
+      .all(loopId) as any[]
+  ).map((r) => ({ timestamp: r.ran_at, outcome: r.outcome }));
+}
+
+function rowToLoop(r: any, runsByLoop?: Map<string, LoopRun[]>): Loop {
   return {
     id: r.id,
     taskRoomId: r.task_room_id,
@@ -408,7 +579,26 @@ function rowToLoop(r: any): Loop {
     active: !!r.active,
     lastRun: r.last_run,
     nextRun: r.next_run,
+    runs: runsByLoop ? (runsByLoop.get(r.id) ?? []) : getLoopRuns(r.id),
   };
+}
+
+/** Batched alternative to getLoopRuns per-row — used by getState() where
+ * every loop is fetched at once anyway (including every scheduler tick). */
+function allLoopRuns(): Map<string, LoopRun[]> {
+  const rows = db
+    .prepare("SELECT loop_id, ran_at, outcome FROM loop_runs ORDER BY ran_at DESC")
+    .all() as { loop_id: string; ran_at: string; outcome: string }[];
+  const byLoop = new Map<string, LoopRun[]>();
+  for (const r of rows) {
+    let list = byLoop.get(r.loop_id);
+    if (!list) {
+      list = [];
+      byLoop.set(r.loop_id, list);
+    }
+    if (list.length < 5) list.push({ timestamp: r.ran_at, outcome: r.outcome });
+  }
+  return byLoop;
 }
 
 function rowToTodo(r: any): TodoItem {
@@ -424,6 +614,7 @@ function rowToTodo(r: any): TodoItem {
 
 const CONNECTION_LABELS: Record<ConnectionKey, string> = {
   anthropic: "Anthropic API key",
+  openrouter: "OpenRouter API key",
   github: "GitHub personal access token",
   postgres: "Postgres connection string",
   slack: "Slack bot token",
@@ -434,7 +625,7 @@ function connectionStatus(key: ConnectionKey): ConnectionStatus {
   const row = db.prepare("SELECT value FROM connections WHERE key = ?").get(key) as
     | { value: string | null }
     | undefined;
-  const value = row?.value ?? null;
+  const value = row?.value ? decryptSecret(DATA_DIR, row.value) : null;
   return {
     key,
     label: CONNECTION_LABELS[key],
@@ -448,17 +639,16 @@ function connectionStatus(key: ConnectionKey): ConnectionStatus {
 // ---------------------------------------------------------------------------
 
 export const repo = {
-  currentMemberId: CURRENT_MEMBER_ID,
-
   getState(): AppState {
     return {
-      members: (db.prepare("SELECT * FROM members").all() as any[]).map(
-        (r): Member => ({ id: r.id, name: r.name, initials: r.initials, color: r.color, role: r.role })
-      ),
+      members: (db.prepare("SELECT * FROM members").all() as any[]).map(rowToMember),
       mcpTools: (db.prepare("SELECT * FROM mcp_tools").all() as any[]).map(
         (r): McpTool => ({ id: r.id, name: r.name, description: r.description, icon: r.icon })
       ),
-      rooms: (db.prepare("SELECT * FROM rooms").all() as any[]).map(rowToRoom),
+      rooms: (() => {
+        const byRoom = taskRoomIdsByRoom();
+        return (db.prepare("SELECT * FROM rooms").all() as any[]).map((r) => rowToRoom(r, byRoom));
+      })(),
       taskRooms: (db.prepare("SELECT * FROM task_rooms").all() as any[]).map(rowToTaskRoom),
       messages: (db.prepare("SELECT * FROM messages ORDER BY created_at ASC").all() as any[]).map(rowToMessage),
       directMessages: (db.prepare("SELECT * FROM direct_messages ORDER BY created_at ASC").all() as any[]).map(
@@ -479,25 +669,67 @@ export const repo = {
         return { model: r.model, runtimeId: r.runtime_id, instructions: r.instructions } satisfies AgentDefaults;
       })(),
       workflows: (db.prepare("SELECT * FROM workflows").all() as any[]).map(rowToWorkflow),
-      loops: (db.prepare("SELECT * FROM loops").all() as any[]).map(rowToLoop),
+      loops: (() => {
+        const runsByLoop = allLoopRuns();
+        return (db.prepare("SELECT * FROM loops").all() as any[]).map((r) => rowToLoop(r, runsByLoop));
+      })(),
       todos: (db.prepare("SELECT * FROM todos").all() as any[]).map(rowToTodo),
-      connections: (["anthropic", "github", "postgres", "slack", "linear"] as ConnectionKey[]).map(
+      connections: (["anthropic", "openrouter", "github", "postgres", "slack", "linear"] as ConnectionKey[]).map(
         connectionStatus
       ),
-      currentMemberId: CURRENT_MEMBER_ID,
+    };
+  },
+
+  /** The public /api/state response for a given caller — the owner sees
+   * everything (unscoped), any other member only sees rooms/task rooms
+   * they're actually listed on and everything derived from those (messages,
+   * agents, workflows, loops, todos). members/mcpTools/agentTeams/runtimes/
+   * defaults/behaviorSettings/connections/directMessages stay unscoped (see
+   * plan doc — DMs specifically have no per-member field to scope by).
+   * Internal callers (claudeAgent.ts, scheduler.ts) keep using the plain
+   * unscoped getState() above — they need the full picture regardless of
+   * any human viewer. */
+  getScopedState(callerId: string): AppState {
+    const full = repo.getState();
+    if (repo.getMemberRole(callerId) === "owner") return full;
+
+    const visibleRoomIds = new Set(full.rooms.filter((r) => r.memberIds.includes(callerId)).map((r) => r.id));
+    const visibleTaskRoomIds = new Set(
+      full.taskRooms
+        .filter((t) => visibleRoomIds.has(t.roomId) && t.memberIds.includes(callerId))
+        .map((t) => t.id)
+    );
+
+    return {
+      ...full,
+      rooms: full.rooms
+        .filter((r) => visibleRoomIds.has(r.id))
+        .map((r) => ({ ...r, taskRoomIds: r.taskRoomIds.filter((id) => visibleTaskRoomIds.has(id)) })),
+      taskRooms: full.taskRooms.filter((t) => visibleTaskRoomIds.has(t.id)),
+      messages: full.messages.filter((m) => visibleTaskRoomIds.has(m.taskRoomId)),
+      // Agents are available workspace-wide (mentionable from any room), so left unscoped
+      // like mcpTools/agentRuntimes — no per-room filtering.
+      workflows: full.workflows.filter((w) => visibleTaskRoomIds.has(w.taskRoomId)),
+      loops: full.loops.filter((l) => visibleTaskRoomIds.has(l.taskRoomId)),
+      todos: full.todos.filter((t) => visibleTaskRoomIds.has(t.taskRoomId)),
     };
   },
 
   // --- rooms ---
-  createRoom(name: string, emoji: string): Room {
+  createRoom(name: string, emoji: string, memberId: string): Room {
     const roomId = id("room");
     db.prepare("INSERT INTO rooms (id, name, emoji, member_ids) VALUES (?,?,?,?)").run(
       roomId,
       name,
       emoji,
-      JSON.stringify([CURRENT_MEMBER_ID])
+      JSON.stringify([memberId])
     );
     return rowToRoom(db.prepare("SELECT * FROM rooms WHERE id = ?").get(roomId));
+  },
+
+  getRoom(roomId: string): Room | null {
+    const r = db.prepare("SELECT * FROM rooms WHERE id = ?").get(roomId);
+    return r ? rowToRoom(r) : null;
   },
 
   addMemberToRoom(roomId: string, memberId: string) {
@@ -519,12 +751,19 @@ export const repo = {
     db.prepare("UPDATE rooms SET member_ids = ? WHERE id = ?").run(JSON.stringify(ids), roomId);
   },
 
+  getMemberRole(memberId: string): "owner" | "member" | null {
+    const row = db.prepare("SELECT role FROM members WHERE id = ?").get(memberId) as
+      | { role: "owner" | "member" }
+      | undefined;
+    return row?.role ?? null;
+  },
+
   // --- task rooms ---
-  createTaskRoom(roomId: string, name: string, emoji: string): TaskRoom {
+  createTaskRoom(roomId: string, name: string, emoji: string, memberId: string): TaskRoom {
     const taskRoomId = id("tr");
     db.prepare(
       "INSERT INTO task_rooms (id, room_id, name, emoji, status, member_ids) VALUES (?,?,?,?,?,?)"
-    ).run(taskRoomId, roomId, name, emoji, "open", JSON.stringify([CURRENT_MEMBER_ID]));
+    ).run(taskRoomId, roomId, name, emoji, "open", JSON.stringify([memberId]));
     return rowToTaskRoom(db.prepare("SELECT * FROM task_rooms WHERE id = ?").get(taskRoomId));
   },
 
@@ -535,6 +774,25 @@ export const repo = {
   getTaskRoom(taskRoomId: string): TaskRoom | null {
     const r = db.prepare("SELECT * FROM task_rooms WHERE id = ?").get(taskRoomId);
     return r ? rowToTaskRoom(r) : null;
+  },
+
+  /** Owner bypasses; otherwise the caller must be listed on both the task
+   * room itself and its parent room — the same two-level definition used by
+   * getScopedState() below, so "can see it" and "can act in it" never diverge. */
+  isTaskRoomMember(taskRoomId: string, memberId: string): boolean {
+    if (repo.getMemberRole(memberId) === "owner") return true;
+    const taskRoom = repo.getTaskRoom(taskRoomId);
+    if (!taskRoom || !taskRoom.memberIds.includes(memberId)) return false;
+    const room = repo.getRoom(taskRoom.roomId);
+    return room ? room.memberIds.includes(memberId) : false;
+  },
+
+  /** Room-level equivalent of isTaskRoomMember, for routes scoped to a
+   * Room's shared project folder rather than one Task Room within it. */
+  isRoomMember(roomId: string, memberId: string): boolean {
+    if (repo.getMemberRole(memberId) === "owner") return true;
+    const room = repo.getRoom(roomId);
+    return room ? room.memberIds.includes(memberId) : false;
   },
 
   // --- messages ---
@@ -559,13 +817,31 @@ export const repo = {
     ).map(rowToMessage);
   },
 
+  getMessage(messageId: string): ChatMessage | null {
+    const r = db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId);
+    return r ? rowToMessage(r) : null;
+  },
+
+  updateMessage(messageId: string, content: string) {
+    db.prepare("UPDATE messages SET content = ?, edited_at = ? WHERE id = ?").run(content, nowIso(), messageId);
+  },
+
+  deleteMessage(messageId: string) {
+    db.prepare("DELETE FROM messages WHERE id = ?").run(messageId);
+  },
+
   // --- direct messages ---
-  addDirectMessage(agentId: string, authorType: "member" | "agent", content: string): DirectMessage {
+  addDirectMessage(
+    agentId: string,
+    authorType: "member" | "agent",
+    content: string,
+    authorId: string | null = null
+  ): DirectMessage {
     const dmId = id("dm");
     const createdAt = nowIso();
     db.prepare(
-      "INSERT INTO direct_messages (id, agent_id, author_type, content, created_at) VALUES (?,?,?,?,?)"
-    ).run(dmId, agentId, authorType, content, createdAt);
+      "INSERT INTO direct_messages (id, agent_id, author_type, author_id, content, created_at) VALUES (?,?,?,?,?,?)"
+    ).run(dmId, agentId, authorType, authorId, content, createdAt);
     return rowToDm(db.prepare("SELECT * FROM direct_messages WHERE id = ?").get(dmId));
   },
 
@@ -573,6 +849,19 @@ export const repo = {
     return (
       db.prepare("SELECT * FROM direct_messages WHERE agent_id = ? ORDER BY created_at ASC").all(agentId) as any[]
     ).map(rowToDm);
+  },
+
+  getDirectMessage(dmId: string): DirectMessage | null {
+    const r = db.prepare("SELECT * FROM direct_messages WHERE id = ?").get(dmId);
+    return r ? rowToDm(r) : null;
+  },
+
+  updateDirectMessage(dmId: string, content: string) {
+    db.prepare("UPDATE direct_messages SET content = ?, edited_at = ? WHERE id = ?").run(content, nowIso(), dmId);
+  },
+
+  deleteDirectMessage(dmId: string) {
+    db.prepare("DELETE FROM direct_messages WHERE id = ?").run(dmId);
   },
 
   // --- agents ---
@@ -584,6 +873,7 @@ export const repo = {
     avatarEmoji: string;
     model: string;
     runtimeId: string;
+    createdById: string;
   }): Agent {
     const agentId = id("agent");
     db.prepare(
@@ -599,10 +889,18 @@ export const repo = {
       params.runtimeId,
       params.instructions,
       "idle",
-      CURRENT_MEMBER_ID,
+      params.createdById,
       "[]"
     );
     return rowToAgent(db.prepare("SELECT * FROM agents WHERE id = ?").get(agentId));
+  },
+
+  updateAgentConfig(agentId: string, params: { model: string; runtimeId: string }) {
+    db.prepare("UPDATE agents SET model = ?, runtime_id = ? WHERE id = ?").run(
+      params.model,
+      params.runtimeId,
+      agentId
+    );
   },
 
   getAgent(agentId: string): Agent | null {
@@ -610,17 +908,37 @@ export const repo = {
     return r ? rowToAgent(r) : null;
   },
 
-  getAgentsForTaskRoom(taskRoomId: string): Agent[] {
-    return (db.prepare("SELECT * FROM agents WHERE task_room_id = ?").all(taskRoomId) as any[]).map(rowToAgent);
+  getAgentsForTaskRoom(_taskRoomId: string): Agent[] {
+    // Agents are available (mentionable) in every room, not just their home task room.
+    return (db.prepare("SELECT * FROM agents").all() as any[]).map(rowToAgent);
   },
 
-  toggleAgentTool(agentId: string, toolId: string) {
+  getAgentsForRoom(roomId: string): Agent[] {
+    return (db.prepare("SELECT * FROM agents WHERE room_id = ?").all(roomId) as any[]).map(rowToAgent);
+  },
+
+  addAgentToRoom(agentId: string, roomId: string) {
+    db.prepare("UPDATE agents SET room_id = ? WHERE id = ?").run(roomId, agentId);
+  },
+
+  removeAgentFromRoom(agentId: string) {
+    db.prepare("UPDATE agents SET room_id = NULL WHERE id = ?").run(agentId);
+  },
+
+  addTeamToRoom(teamId: string, roomId: string): Agent[] {
+    const team = repo.getAgentTeam(teamId);
+    if (!team) return [];
+    for (const agentId of team.agentIds) repo.addAgentToRoom(agentId, roomId);
+    return team.agentIds.map((agentId) => repo.getAgent(agentId)).filter((a): a is Agent => a !== null);
+  },
+
+  toggleAgentTool(agentId: string, toolId: string, memberId: string) {
     const agent = repo.getAgent(agentId);
     if (!agent) return;
     const hasGrant = agent.grants.some((g) => g.toolId === toolId);
     const grants = hasGrant
       ? agent.grants.filter((g) => g.toolId !== toolId)
-      : [...agent.grants, { toolId, grantedById: CURRENT_MEMBER_ID, grantedAt: nowIso() }];
+      : [...agent.grants, { toolId, grantedById: memberId, grantedAt: nowIso() }];
     db.prepare("UPDATE agents SET grants = ? WHERE id = ?").run(JSON.stringify(grants), agentId);
   },
 
@@ -653,7 +971,7 @@ export const repo = {
     return r ? rowToTeam(r) : null;
   },
 
-  addTeamToTaskRoom(teamId: string, taskRoomId: string): Agent[] {
+  addTeamToTaskRoom(teamId: string, taskRoomId: string, memberId: string): Agent[] {
     const team = repo.getAgentTeam(teamId);
     if (!team) return [];
     const clones: Agent[] = [];
@@ -669,6 +987,7 @@ export const repo = {
           avatarEmoji: source.avatarEmoji,
           model: source.model,
           runtimeId: source.runtimeId,
+          createdById: memberId,
         })
       );
     }
@@ -730,6 +1049,11 @@ export const repo = {
     return rowToLoop(db.prepare("SELECT * FROM loops WHERE id = ?").get(loopId));
   },
 
+  getLoop(loopId: string): Loop | null {
+    const r = db.prepare("SELECT * FROM loops WHERE id = ?").get(loopId);
+    return r ? rowToLoop(r) : null;
+  },
+
   toggleLoopActive(loopId: string) {
     const r = db.prepare("SELECT active FROM loops WHERE id = ?").get(loopId) as { active: number } | undefined;
     if (!r) return;
@@ -740,7 +1064,17 @@ export const repo = {
     db.prepare("UPDATE loops SET last_run = ?, next_run = ? WHERE id = ?").run(lastRun, nextRun, loopId);
   },
 
+  recordLoopRun(loopId: string, ranAt: string, outcome: string) {
+    db.prepare("INSERT INTO loop_runs (id, loop_id, ran_at, outcome) VALUES (?,?,?,?)").run(
+      id("loop-run"),
+      loopId,
+      ranAt,
+      outcome
+    );
+  },
+
   removeLoop(loopId: string) {
+    db.prepare("DELETE FROM loop_runs WHERE loop_id = ?").run(loopId);
     db.prepare("DELETE FROM loops WHERE id = ?").run(loopId);
   },
 
@@ -751,6 +1085,11 @@ export const repo = {
       "INSERT INTO todos (id, task_room_id, text, done, assignee_id, due_date) VALUES (?,?,?,0,?,?)"
     ).run(todoId, taskRoomId, text, assigneeId, dueDate);
     return rowToTodo(db.prepare("SELECT * FROM todos WHERE id = ?").get(todoId));
+  },
+
+  getTodo(todoId: string): TodoItem | null {
+    const r = db.prepare("SELECT * FROM todos WHERE id = ?").get(todoId);
+    return r ? rowToTodo(r) : null;
   },
 
   toggleTodo(todoId: string) {
@@ -784,13 +1123,13 @@ export const repo = {
     const row = db.prepare("SELECT value FROM connections WHERE key = ?").get(key) as
       | { value: string | null }
       | undefined;
-    return row?.value ?? null;
+    return row?.value ? decryptSecret(DATA_DIR, row.value) : null;
   },
 
   setConnection(key: ConnectionKey, value: string) {
     db.prepare(
       "INSERT INTO connections (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
-    ).run(key, value, nowIso());
+    ).run(key, encryptSecret(DATA_DIR, value), nowIso());
   },
 
   removeConnection(key: ConnectionKey) {
@@ -798,7 +1137,87 @@ export const repo = {
   },
 
   getConnectionStatuses(): ConnectionStatus[] {
-    return (["anthropic", "github", "postgres", "slack", "linear"] as ConnectionKey[]).map(connectionStatus);
+    return (["anthropic", "openrouter", "github", "postgres", "slack", "linear"] as ConnectionKey[]).map(connectionStatus);
+  },
+
+  // --- auth ---
+  getMember(memberId: string): Member | null {
+    const r = db.prepare("SELECT * FROM members WHERE id = ?").get(memberId);
+    return r ? rowToMember(r) : null;
+  },
+
+  /** Finds the member linked to this OAuth identity, or creates one — the
+   * very first real account ever created becomes "owner", every one after
+   * that is a plain "member". Wrapped in a transaction so that decision
+   * (checked via oauth_identities being empty) is atomic even though this
+   * runs after an awaited network round-trip to the provider. */
+  findOrCreateMemberByOAuth(
+    provider: string,
+    providerUserId: string,
+    profile: { name: string; email: string; avatarUrl: string | null }
+  ): Member {
+    const existing = db
+      .prepare(
+        `SELECT members.* FROM oauth_identities
+         JOIN members ON members.id = oauth_identities.member_id
+         WHERE oauth_identities.provider = ? AND oauth_identities.provider_user_id = ?`
+      )
+      .get(provider, providerUserId);
+    if (existing) return rowToMember(existing);
+
+    return db.transaction(() => {
+      const isFirstAccount = (db.prepare("SELECT COUNT(*) as c FROM oauth_identities").get() as { c: number }).c === 0;
+      const memberId = id("m");
+      const palette = ["#5b5cff", "#00b389", "#ffb020", "#ff6b6b", "#8a5cf6", "#0ea5b7"];
+      const initials = profile.name
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0]!.toUpperCase())
+        .join("") || "?";
+      const color = palette[Math.floor(Math.random() * palette.length)];
+      db.prepare("INSERT INTO members (id, name, initials, color, role, email, avatar_url) VALUES (?,?,?,?,?,?,?)").run(
+        memberId,
+        profile.name,
+        initials,
+        color,
+        isFirstAccount ? "owner" : "member",
+        profile.email,
+        profile.avatarUrl
+      );
+      db.prepare(
+        "INSERT INTO oauth_identities (id, member_id, provider, provider_user_id, created_at) VALUES (?,?,?,?,?)"
+      ).run(id("oauth"), memberId, provider, providerUserId, nowIso());
+      return repo.getMember(memberId)!;
+    })();
+  },
+
+  createSession(memberId: string): string {
+    const token = randomBytes(32).toString("hex");
+    const now = new Date();
+    const expires = new Date(now.getTime() + 30 * 24 * 60 * 60_000); // 30 days
+    db.prepare("INSERT INTO sessions (token, member_id, created_at, expires_at) VALUES (?,?,?,?)").run(
+      token,
+      memberId,
+      now.toISOString(),
+      expires.toISOString()
+    );
+    return token;
+  },
+
+  getSessionMember(token: string): Member | null {
+    const row = db
+      .prepare(
+        `SELECT members.* FROM sessions
+         JOIN members ON members.id = sessions.member_id
+         WHERE sessions.token = ? AND sessions.expires_at > ?`
+      )
+      .get(token, nowIso());
+    return row ? rowToMember(row) : null;
+  },
+
+  deleteSession(token: string) {
+    db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
   },
 };
 

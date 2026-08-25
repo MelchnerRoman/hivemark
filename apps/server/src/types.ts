@@ -4,6 +4,8 @@ export type Member = {
   initials: string;
   color: string;
   role: "owner" | "member";
+  email?: string;
+  avatarUrl?: string;
 };
 
 export type McpTool = {
@@ -11,6 +13,10 @@ export type McpTool = {
   name: string;
   description: string;
   icon: string;
+  /** Only set on the /api/state response for tools that need a one-time local
+   * setup step (e.g. downloading a browser binary) before they'll work. Not
+   * persisted — computed live by checking the machine's actual state. */
+  status?: "ready" | "needs_setup";
 };
 
 export type AgentGrant = {
@@ -21,7 +27,11 @@ export type AgentGrant = {
 
 export type Agent = {
   id: string;
+  /** The Task Room this agent was created in — always set, shown as "Created in X". */
   taskRoomId: string;
+  /** When set, this agent is also mentionable/usable in every Task Room within this
+   * Room (not just its home Task Room). Null = task-room-scoped only (original behavior). */
+  roomId: string | null;
   name: string;
   color: string;
   avatarEmoji: string;
@@ -73,14 +83,19 @@ export type ChatMessage = {
   content: string;
   createdAt: string;
   mentionedAgentIds?: string[];
+  editedAt: string | null;
 };
 
 export type DirectMessage = {
   id: string;
   agentId: string;
   authorType: "member" | "agent";
+  /** Which member sent this, for member-authored rows. Null for agent-authored
+   * rows, and for rows written before this field existed. */
+  authorId: string | null;
   content: string;
   createdAt: string;
+  editedAt: string | null;
 };
 
 export type WorkflowStep = {
@@ -98,6 +113,11 @@ export type Workflow = {
   status: "draft" | "running" | "done";
 };
 
+export type LoopRun = {
+  timestamp: string;
+  outcome: string;
+};
+
 export type Loop = {
   id: string;
   taskRoomId: string;
@@ -106,6 +126,8 @@ export type Loop = {
   active: boolean;
   lastRun: string | null;
   nextRun: string | null;
+  /** Most recent runs, newest first. Real — recorded by the scheduler each time it fires. */
+  runs: LoopRun[];
 };
 
 export type TodoItem = {
@@ -139,7 +161,7 @@ export type Room = {
 export type WorkspaceTab = "chat" | "workflows" | "loops" | "todos" | "agents";
 
 /** Connection keys the backend knows how to store a credential for. */
-export type ConnectionKey = "anthropic" | "github" | "postgres" | "slack" | "linear";
+export type ConnectionKey = "anthropic" | "openrouter" | "github" | "postgres" | "slack" | "linear";
 
 export type ConnectionStatus = {
   key: ConnectionKey;
@@ -168,7 +190,6 @@ export type AppState = {
   loops: Loop[];
   todos: TodoItem[];
   connections: ConnectionStatus[];
-  currentMemberId: string;
 };
 
 export type WsMessage = { type: "sync" };

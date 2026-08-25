@@ -9,8 +9,8 @@ Ships as both a web app and an Electron desktop app, sharing the same frontend.
 - **Rooms → Task Rooms** — a Room is a team/project (e.g. "Platform Team"); each Room holds several Task Rooms (e.g. "Rework onboarding flow"), which is where the actual chat, agents, and work items live.
 - **Agents** — created inside a Task Room, backed by a real Claude model, with an instructions prompt and a set of granted MCP tools. Reply when `@mentioned` in the Task Room chat, or 1:1 in a **Direct Message**.
 - **Agent Teams** — group agents into a reusable team and clone the whole group into a new Task Room in one action.
-- **Agent Runtimes** (Settings → Agent runtimes) — which execution backend an agent uses (native Hivemark agent, Claude Code, Codex, Goose), plus global agent defaults and behavior toggles.
-- **Connections** (Settings → Connections) — where you paste your own Anthropic API key and per-tool credentials (GitHub/Postgres/Slack/Linear); stored locally, never read from an environment variable.
+- **Agent Runtimes** (Settings → Agent runtimes) — which execution backend an agent uses. All five are real, not cosmetic — see "Agent Runtimes" below. Plus global agent defaults and behavior toggles.
+- **Connections** (Settings → Connections) — where you paste your own Anthropic and/or OpenRouter API key, and per-tool credentials (GitHub/Postgres/Slack/Linear); stored locally, never read from an environment variable.
 - **Workflows, Loops, Todos** — per-Task-Room. Workflows are a checklist with a draft/running/done status; Loops fire a recurring agent run on a schedule; Todos are a plain assignable list.
 
 ## Architecture
@@ -42,17 +42,15 @@ That single `npm install` at the root installs all three workspace packages.
 
 ## Running in development
 
-You need the backend and the web frontend running. Pick one of:
-
-**A. In the browser** (two terminals):
+**In the browser** (one command, one terminal):
 ```bash
-npm run dev --workspace=server   # http://localhost:4001
-npm run dev --workspace=web      # http://localhost:3000
+npm run dev   # starts apps/server on :4001 and apps/web on :3000 together
 ```
+Then open http://localhost:3000. Ctrl+C stops both.
 
-**B. In the Electron app** (two terminals — Electron auto-spawns the backend for you):
+**In the Electron app** (two terminals — Electron auto-spawns the backend itself, so don't also run `npm run dev`):
 ```bash
-npm run dev --workspace=web      # http://localhost:3000
+npm run dev:web           # http://localhost:3000
 npm run dev --workspace=desktop  # spawns apps/server itself, then opens a window
 ```
 
@@ -67,6 +65,24 @@ Agents don't work until you add credentials — **the app never reads an API key
 3. `@mention` an agent in a Task Room, or open a DM with one, to get a real Claude reply.
 
 The same Connections panel accepts a GitHub token, a Postgres connection string, a Slack bot token, and a Linear API key — add them once you grant the corresponding tool to an agent.
+
+## Agent Runtimes
+
+Set an agent's Runtime per-agent, or as the global default in Settings → Agent runtimes. All five actually run the agent, not just label it:
+
+| Runtime | How it runs | Auth | Verified |
+|---|---|---|---|
+| **Hivemark Agent** | Calls the Anthropic API directly (`@anthropic-ai/sdk`) | Hivemark's stored Anthropic key | Live, incl. tool calls |
+| **OpenRouter** | Calls OpenRouter's chat-completions API directly (plain `fetch`, `apps/server/src/openrouterAgent.ts`) | Hivemark's stored OpenRouter key | Live, incl. tool calls |
+| **Claude Code** | Spawns the real `claude -p` CLI (`apps/server/src/claudeCodeAgent.ts`) | Whatever's already logged in for the `claude` CLI on this machine | Live |
+| **Codex** | Spawns `npx @agentclientprotocol/codex-acp` and talks to it over the real Agent Client Protocol (`apps/server/src/codexAgent.ts`, using `@agentclientprotocol/sdk`) | Whatever's already configured for the Codex CLI (OPENAI_API_KEY/CODEX_API_KEY env var, or ChatGPT login) | Protocol verified live (handshake/session/prompt all real); no reply seen since no Codex credentials were available to test with |
+| **Goose** | Spawns the real `goose run --no-session` CLI (`apps/server/src/gooseAgent.ts`) | Hivemark's stored Anthropic key, passed as `ANTHROPIC_API_KEY` | Live |
+
+For OpenRouter, an agent's Model field switches from the fixed Claude picker to free text — type any model slug OpenRouter hosts, e.g. `openai/gpt-4o`, `anthropic/claude-3.7-sonnet`, `meta-llama/llama-3.1-70b-instruct`.
+
+The Claude Code runtime card in Settings → Agent runtimes shows whether the `claude` CLI is signed in on this machine, with a **Sign in with Claude** button when it isn't. Clicking it runs the real `claude auth login` (opens the user's actual browser to Anthropic's OAuth consent page); the UI polls status every 2s until it detects a successful login. This is a real, supported flow (`claude auth login`/`claude auth status --json`, `apps/server/src/claudeCodeAuth.ts`) — not something reverse-engineered, since Anthropic doesn't offer a public "Sign in with Claude" OAuth flow for third-party apps generally.
+
+Claude Code and Codex are text-only for now — granting an MCP tool to an agent on one of those runtimes has no effect. Claude Code's own huge built-in toolset (Bash, Read, Write, Edit, ...) isn't exposed at all; Codex's tool-call permission requests are auto-denied (it can still reason and reply, just can't take actions on this machine) since there's no one to approve them in a headless server process. Wiring either up properly is a deliberate, separate, security-reviewed feature — not something to enable by accident.
 
 ## MCP tools
 

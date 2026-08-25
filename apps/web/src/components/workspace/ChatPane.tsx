@@ -18,10 +18,15 @@ const MENTION_QUERY = /@([^\s@]*)$/;
 export function ChatPane({ taskRoomId }: { taskRoomId: string }) {
   const messages = useStore(useShallow((s) => s.messages.filter((m) => m.taskRoomId === taskRoomId)));
   const members = useStore((s) => s.members);
-  const agents = useStore(useShallow((s) => s.agents.filter((a) => a.taskRoomId === taskRoomId)));
+  const agents = useStore((s) => s.agents);
   const sendMessage = useStore((s) => s.sendMessage);
+  const editMessage = useStore((s) => s.editMessage);
+  const deleteMessage = useStore((s) => s.deleteMessage);
+  const currentMemberId = useStore((s) => s.currentMemberId);
   const [draft, setDraft] = useState("");
   const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
 
   const mentionQuery = draft.match(MENTION_QUERY)?.[1];
   const suggestions = useMemo(() => {
@@ -72,15 +77,73 @@ export function ChatPane({ taskRoomId }: { taskRoomId: string }) {
       <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
         {messages.map((m) => {
           const a = author(m.authorType, m.authorId);
+          const isOwn = m.authorType === "member" && m.authorId === currentMemberId;
+          const canDelete = isOwn || m.authorType === "agent";
+          const isEditing = editingId === m.id;
           return (
-            <div key={m.id} className="flex gap-3">
+            <div key={m.id} className="group flex gap-3">
               <Avatar label={a.initials} color={a.color} size={30} />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-sm font-medium">{a.name}</span>
                   <span className="text-xs text-foreground-muted">{formatTime(m.createdAt)}</span>
+                  {m.editedAt && <span className="text-xs text-foreground-muted">(edited)</span>}
+                  {!isEditing && (isOwn || canDelete) && (
+                    <span className="ml-auto flex gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                      {isOwn && (
+                        <button
+                          onClick={() => {
+                            setEditingId(m.id);
+                            setEditDraft(m.content);
+                          }}
+                          className="text-xs text-foreground-muted hover:text-brand"
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          onClick={() => deleteMessage(m.id)}
+                          className="text-xs text-foreground-muted hover:text-danger"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </span>
+                  )}
                 </div>
-                <p className="text-sm leading-relaxed text-foreground">{m.content}</p>
+                {isEditing ? (
+                  <div className="mt-1 flex gap-2">
+                    <input
+                      autoFocus
+                      value={editDraft}
+                      onChange={(e) => setEditDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && editDraft.trim()) {
+                          editMessage(m.id, editDraft.trim());
+                          setEditingId(null);
+                        } else if (e.key === "Escape") {
+                          setEditingId(null);
+                        }
+                      }}
+                      className="flex-1 rounded-lg border border-border bg-background px-2 py-1 text-sm outline-none focus:border-brand"
+                    />
+                    <button
+                      onClick={() => {
+                        if (editDraft.trim()) editMessage(m.id, editDraft.trim());
+                        setEditingId(null);
+                      }}
+                      className="text-xs text-brand hover:underline"
+                    >
+                      Save
+                    </button>
+                    <button onClick={() => setEditingId(null)} className="text-xs text-foreground-muted hover:underline">
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-sm leading-relaxed text-foreground">{m.content}</p>
+                )}
               </div>
             </div>
           );

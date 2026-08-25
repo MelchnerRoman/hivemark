@@ -2,7 +2,8 @@ const { app, Menu } = require("electron");
 
 const isMac = process.platform === "darwin";
 
-function buildMenu() {
+function buildMenu(onConnectToServer) {
+  const connectItem = { label: "Connect to Server…", click: onConnectToServer };
   const template = [
     ...(isMac
       ? [
@@ -10,6 +11,8 @@ function buildMenu() {
             label: app.name,
             submenu: [
               { role: "about" },
+              { type: "separator" },
+              connectItem,
               { type: "separator" },
               { role: "services" },
               { type: "separator" },
@@ -21,7 +24,7 @@ function buildMenu() {
             ],
           },
         ]
-      : []),
+      : [{ label: "File", submenu: [connectItem, { type: "separator" }, { role: "quit" }] }]),
     {
       label: "Edit",
       submenu: [
@@ -63,8 +66,8 @@ function buildMenu() {
   return Menu.buildFromTemplate(template);
 }
 
-function installApplicationMenu() {
-  Menu.setApplicationMenu(buildMenu());
+function installApplicationMenu(onConnectToServer) {
+  Menu.setApplicationMenu(buildMenu(onConnectToServer));
 }
 
 module.exports = { installApplicationMenu };

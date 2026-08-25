@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/lib/store";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
-import type { TodoItem } from "@/lib/types";
+import type { Agent, Member, TodoItem } from "@/lib/types";
 
 type TodoFilter = "all" | "mine" | "unassigned";
 
@@ -18,6 +18,10 @@ const FILTERS: { id: TodoFilter; label: string }[] = [
 export function TodosPanel({ taskRoomId }: { taskRoomId: string }) {
   const allTodos = useStore(useShallow((s) => s.todos.filter((t) => t.taskRoomId === taskRoomId)));
   const members = useStore((s) => s.members);
+  const roomId = useStore((s) => s.taskRooms.find((t) => t.id === taskRoomId)?.roomId);
+  const agents = useStore(
+    useShallow((s) => s.agents.filter((a) => a.taskRoomId === taskRoomId || (a.roomId && a.roomId === roomId)))
+  );
   const currentMemberId = useStore((s) => s.currentMemberId);
   const addTodo = useStore((s) => s.addTodo);
   const toggleTodo = useStore((s) => s.toggleTodo);
@@ -65,11 +69,22 @@ export function TodosPanel({ taskRoomId }: { taskRoomId: string }) {
           className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
         >
           <option value="">Unassigned</option>
-          {members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
+          <optgroup label="Members">
+            {members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </optgroup>
+          {agents.length > 0 && (
+            <optgroup label="Agents">
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
         <Button type="submit" disabled={!text.trim()}>
           Add
@@ -92,7 +107,7 @@ export function TodosPanel({ taskRoomId }: { taskRoomId: string }) {
 
       <div className="space-y-1.5">
         {open.map((todo) => (
-          <TodoRow key={todo.id} todo={todo} members={members} onToggle={toggleTodo} />
+          <TodoRow key={todo.id} todo={todo} members={members} agents={agents} onToggle={toggleTodo} />
         ))}
       </div>
 
@@ -103,7 +118,7 @@ export function TodosPanel({ taskRoomId }: { taskRoomId: string }) {
           </p>
           <div className="space-y-1.5">
             {done.map((todo) => (
-              <TodoRow key={todo.id} todo={todo} members={members} onToggle={toggleTodo} />
+              <TodoRow key={todo.id} todo={todo} members={members} agents={agents} onToggle={toggleTodo} />
             ))}
           </div>
         </div>
@@ -127,13 +142,16 @@ function formatDueDate(dueDate: string | null) {
 function TodoRow({
   todo,
   members,
+  agents,
   onToggle,
 }: {
   todo: TodoItem;
-  members: { id: string; name: string; initials: string; color: string }[];
+  members: Member[];
+  agents: Agent[];
   onToggle: (id: string) => void;
 }) {
   const assignee = members.find((m) => m.id === todo.assigneeId);
+  const assigneeAgent = agents.find((a) => a.id === todo.assigneeId);
   const dueLabel = formatDueDate(todo.dueDate);
   const isOverdue = !todo.done && !!todo.dueDate && new Date(`${todo.dueDate}T00:00:00`) < new Date(new Date().toDateString());
   return (
@@ -149,6 +167,11 @@ function TodoRow({
         <span className={`text-xs ${isOverdue ? "text-danger" : "text-foreground-muted"}`}>{dueLabel}</span>
       )}
       {assignee && <Avatar label={assignee.initials} color={assignee.color} size={22} />}
+      {assigneeAgent && (
+        <span title={assigneeAgent.name}>
+          <Avatar label={assigneeAgent.avatarEmoji} color={assigneeAgent.color} size={22} />
+        </span>
+      )}
     </label>
   );
 }

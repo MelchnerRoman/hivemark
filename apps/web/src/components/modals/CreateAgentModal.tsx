@@ -4,8 +4,9 @@ import { FormEvent, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { useStore } from "@/lib/store";
-import { AGENT_COLOR_OPTIONS, AGENT_EMOJI_OPTIONS, AGENT_MODEL_OPTIONS } from "@/lib/agent-constants";
+import { AGENT_COLOR_OPTIONS, AGENT_EMOJI_OPTIONS } from "@/lib/agent-constants";
 import { RuntimeSelect } from "@/components/agents/RuntimeSelect";
+import { ModelInput } from "@/components/agents/ModelInput";
 
 export function CreateAgentModal({
   open,
@@ -48,6 +49,14 @@ function CreateAgentForm({
 
   const needsTaskRoomPicker = !fixedTaskRoomId;
   const canSubmit = name.trim().length > 0 && taskRoomId.length > 0;
+
+  function handleRuntimeChange(nextRuntimeId: string) {
+    const switchingToOpenRouter = nextRuntimeId === "runtime-openrouter" && runtimeId !== "runtime-openrouter";
+    const switchingAwayFromOpenRouter = runtimeId === "runtime-openrouter" && nextRuntimeId !== "runtime-openrouter";
+    setRuntimeId(nextRuntimeId);
+    if (switchingToOpenRouter) setModel("");
+    else if (switchingAwayFromOpenRouter) setModel(agentDefaults.model);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -101,21 +110,8 @@ function CreateAgentForm({
           className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
         />
       </div>
-      <RuntimeSelect value={runtimeId} onChange={setRuntimeId} />
-      <div>
-        <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Model</label>
-        <select
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
-        >
-          {AGENT_MODEL_OPTIONS.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-      </div>
+      <RuntimeSelect value={runtimeId} onChange={handleRuntimeChange} />
+      <ModelInput runtimeId={runtimeId} value={model} onChange={setModel} />
       <div>
         <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Avatar</label>
         <div className="flex flex-wrap gap-1.5">

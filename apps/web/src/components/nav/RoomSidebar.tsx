@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
+import { getToken } from "@/lib/auth";
 import { Logo } from "@/components/brand/Logo";
 import { ThemeToggle } from "@/components/brand/ThemeToggle";
 import { Avatar } from "@/components/ui/Avatar";
@@ -9,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { CreateRoomModal } from "@/components/modals/CreateRoomModal";
 import { RoomSettingsModal } from "@/components/modals/RoomSettingsModal";
 import { AgentSettingsModal } from "@/components/modals/AgentSettingsModal";
+import { SearchModal } from "@/components/modals/SearchModal";
 
 const SEARCH_THRESHOLD = 6;
 
@@ -23,9 +25,11 @@ export function RoomSidebar() {
   const agents = useStore((s) => s.agents);
   const selectedDmAgentId = useStore((s) => s.selectedDmAgentId);
   const openAgentDm = useStore((s) => s.openAgentDm);
+  const logout = useStore((s) => s.logout);
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsRoomId, setSettingsRoomId] = useState<string | null>(null);
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
 
   const me = members.find((m) => m.id === currentMemberId);
@@ -42,6 +46,14 @@ export function RoomSidebar() {
       <div className="flex items-center justify-between px-4 py-4">
         <Logo size={22} />
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-foreground-muted hover:bg-surface-raised hover:text-foreground"
+            aria-label="Search"
+            title="Search"
+          >
+            🔍
+          </button>
           <button
             onClick={() => setAgentSettingsOpen(true)}
             className="flex h-8 w-8 items-center justify-center rounded-full text-foreground-muted hover:bg-surface-raised hover:text-foreground"
@@ -183,6 +195,18 @@ export function RoomSidebar() {
           <p className="truncate text-sm font-medium">{me?.name}</p>
           <p className="truncate text-xs text-foreground-muted">Online</p>
         </div>
+        {/* Only shown when a real OAuth session exists — the default
+            single-user local mode has no login to log out of. */}
+        {getToken() && (
+          <button
+            onClick={logout}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-foreground-muted hover:bg-surface-raised hover:text-danger"
+            aria-label="Log out"
+            title="Log out"
+          >
+            ⏻
+          </button>
+        )}
       </div>
 
       <CreateRoomModal open={createOpen} onClose={() => setCreateOpen(false)} />
@@ -192,6 +216,7 @@ export function RoomSidebar() {
         onClose={() => setSettingsRoomId(null)}
       />
       <AgentSettingsModal open={agentSettingsOpen} onClose={() => setAgentSettingsOpen(false)} />
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </aside>
   );
 }
