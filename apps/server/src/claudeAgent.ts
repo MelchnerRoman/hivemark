@@ -37,9 +37,6 @@ function buildRoomContext(taskRoomId: string): string | null {
 }
 
 function buildHistoryMessages(agent: Agent, turn: Turn): HistoryMessage[] {
-  const members = repo.getState().members;
-  const memberName = (id: string) => members.find((m) => m.id === id)?.name ?? "Someone";
-
   if (turn.kind === "dm") {
     const dms = repo.getDirectMessagesForAgent(agent.id);
     return dms.map((m) => ({
@@ -48,8 +45,14 @@ function buildHistoryMessages(agent: Agent, turn: Turn): HistoryMessage[] {
     }));
   }
 
+  // Only fetched for task-room turns (DMs above never need a member name) —
+  // and via the lightweight targeted queries below, not the full getState()
+  // (all messages, all DMs, connection checks, ...), since this runs on
+  // every single agent turn.
+  const members = repo.getAllMembers();
+  const memberName = (id: string) => members.find((m) => m.id === id)?.name ?? "Someone";
   const messages = repo.getMessagesForTaskRoom(turn.taskRoomId);
-  const agents = repo.getState().agents;
+  const agents = repo.getAllAgents();
   return messages.map((m) => {
     if (m.authorType === "agent" && m.authorId === agent.id) {
       return { role: "assistant", content: m.content };

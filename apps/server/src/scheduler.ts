@@ -49,9 +49,7 @@ export function computeNextRun(schedule: string, from: Date): Date | null {
 
 async function tick() {
   const now = new Date();
-  for (const loop of repo.getState().loops) {
-    if (!loop.active) continue;
-
+  for (const loop of repo.getActiveLoops()) {
     if (!loop.nextRun) {
       const next = computeNextRun(loop.schedule, now);
       if (next) repo.setLoopRun(loop.id, loop.lastRun, next.toISOString());

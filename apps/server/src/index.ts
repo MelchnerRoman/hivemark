@@ -579,7 +579,7 @@ app.post(
 app.post(
   "/api/agents/stop-all",
   handle((_req, res) => {
-    for (const agent of repo.getState().agents) {
+    for (const agent of repo.getAllAgents()) {
       if (agent.status === "running") repo.setAgentStatus(agent.id, "idle");
     }
     bus.emit("sync");

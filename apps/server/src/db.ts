@@ -195,6 +195,24 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
+
+-- Every one of these backs a WHERE clause that's run either per-request
+-- (getMessagesForTaskRoom/getDirectMessagesForAgent, called on every agent
+-- turn) or inside getState() (messages/direct_messages ORDER BY created_at
+-- with no WHERE — the index still lets SQLite walk it pre-sorted instead of
+-- building a temp b-tree). better-sqlite3 is synchronous, so an unindexed
+-- scan here blocks the whole Node event loop for every connected client,
+-- not just the requester.
+CREATE INDEX IF NOT EXISTS idx_messages_task_room ON messages(task_room_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_direct_messages_agent ON direct_messages(agent_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_direct_messages_created_at ON direct_messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_task_rooms_room ON task_rooms(room_id);
+CREATE INDEX IF NOT EXISTS idx_agents_room ON agents(room_id);
+CREATE INDEX IF NOT EXISTS idx_workflows_task_room ON workflows(task_room_id);
+CREATE INDEX IF NOT EXISTS idx_loops_task_room ON loops(task_room_id);
+CREATE INDEX IF NOT EXISTS idx_todos_task_room ON todos(task_room_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_member ON sessions(member_id);
 `);
 
 // Migration for DBs created before `agents.room_id` existed — CREATE TABLE IF
@@ -237,6 +255,7 @@ CREATE TABLE IF NOT EXISTS loop_runs (
   ran_at TEXT NOT NULL,
   outcome TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_loop_runs_loop ON loop_runs(loop_id, ran_at);
 `);
 
 // Message editing — added after messages could already exist.
@@ -292,7 +311,13 @@ function seedCatalog() {
   const count = (db.prepare("SELECT COUNT(*) as c FROM agent_runtimes").get() as { c: number }).c;
   if (count > 0) return;
 
-  const insertTool = db.prepare("INSERT INTO mcp_tools (id, name, description, icon) VALUES (?,?,?,?)");
+  // OR IGNORE: mcp-filesystem/mcp-preview are also seeded unconditionally
+  // above (lines ~220-228) on every boot, before this runs — on a genuinely
+  // fresh DB (agent_runtimes empty) a plain INSERT here would collide with
+  // those and crash, permanently wedging a first-time install since
+  // agent_runtimes would then stay empty forever (crash-looping on every
+  // subsequent boot too).
+  const insertTool = db.prepare("INSERT OR IGNORE INTO mcp_tools (id, name, description, icon) VALUES (?,?,?,?)");
   const mcpTools: McpTool[] = [
     { id: "mcp-github", name: "GitHub", description: "Read/write repos, PRs, issues", icon: "code" },
     { id: "mcp-linear", name: "Linear", description: "Create and update tickets", icon: "list" },
@@ -444,6 +469,14 @@ seedDemoWorkspace();
 // Row <-> domain-type mapping helpers
 // ---------------------------------------------------------------------------
 
+/** Every array-typed column is stored via JSON.stringify(arr), which always
+ * writes the empty array as exactly "[]" — skip the JSON.parse call for that
+ * (by far the most common value: most messages mention no agents, most
+ * agents hold no grants) rather than paying a full parse for "nothing". */
+function parseArray<T = unknown>(json: string): T[] {
+  return json === "[]" ? [] : JSON.parse(json);
+}
+
 function rowToMember(r: any): Member {
   return {
     id: r.id,
@@ -461,7 +494,7 @@ function rowToRoom(r: any, taskRoomIdsByRoom?: Map<string, string[]>): Room {
     id: r.id,
     name: r.name,
     emoji: r.emoji,
-    memberIds: JSON.parse(r.member_ids),
+    memberIds: parseArray(r.member_ids),
     taskRoomIds: taskRoomIdsByRoom
       ? (taskRoomIdsByRoom.get(r.id) ?? [])
       : (db.prepare("SELECT id FROM task_rooms WHERE room_id = ?").all(r.id) as any[]).map((t) => t.id),
@@ -489,7 +522,7 @@ function rowToTaskRoom(r: any): TaskRoom {
     name: r.name,
     emoji: r.emoji,
     status: r.status as TaskRoomStatus,
-    memberIds: JSON.parse(r.member_ids),
+    memberIds: parseArray(r.member_ids),
   };
 }
 
@@ -501,7 +534,7 @@ function rowToMessage(r: any): ChatMessage {
     authorId: r.author_id,
     content: r.content,
     createdAt: r.created_at,
-    mentionedAgentIds: JSON.parse(r.mentioned_agent_ids),
+    mentionedAgentIds: parseArray(r.mentioned_agent_ids),
     editedAt: r.edited_at ?? null,
   };
 }
@@ -531,12 +564,12 @@ function rowToAgent(r: any): Agent {
     instructions: r.instructions,
     status: r.status,
     createdById: r.created_by_id,
-    grants: JSON.parse(r.grants),
+    grants: parseArray(r.grants),
   };
 }
 
 function rowToTeam(r: any): AgentTeam {
-  return { id: r.id, name: r.name, mode: r.mode as AgentTeamMode, agentIds: JSON.parse(r.agent_ids) };
+  return { id: r.id, name: r.name, mode: r.mode as AgentTeamMode, agentIds: parseArray(r.agent_ids) };
 }
 
 function rowToRuntime(r: any): AgentRuntime {
@@ -558,7 +591,7 @@ function rowToWorkflow(r: any): Workflow {
     name: r.name,
     description: r.description,
     status: r.status,
-    steps: JSON.parse(r.steps),
+    steps: parseArray(r.steps),
   };
 }
 
@@ -910,6 +943,14 @@ export const repo = {
 
   getAgentsForTaskRoom(_taskRoomId: string): Agent[] {
     // Agents are available (mentionable) in every room, not just their home task room.
+    return repo.getAllAgents();
+  },
+
+  /** Every agent, unscoped — the same query getAgentsForTaskRoom already runs
+   * (agents are global, not per-room), pulled out so callers that just need
+   * "all agents" (e.g. stop-all) don't have to build the entire getState()
+   * payload (messages, DMs, connections, ...) just to reach `.agents`. */
+  getAllAgents(): Agent[] {
     return (db.prepare("SELECT * FROM agents").all() as any[]).map(rowToAgent);
   },
 
@@ -1054,6 +1095,15 @@ export const repo = {
     return r ? rowToLoop(r) : null;
   },
 
+  /** Active loops only — used by the scheduler's once-a-minute tick(), which
+   * used to call the full getState() (every message, every DM, connection
+   * checks, ...) just to reach `.loops`. Filtering `active = 1` in SQL also
+   * skips rows tick() would immediately discard anyway. */
+  getActiveLoops(): Loop[] {
+    const runsByLoop = allLoopRuns();
+    return (db.prepare("SELECT * FROM loops WHERE active = 1").all() as any[]).map((r) => rowToLoop(r, runsByLoop));
+  },
+
   toggleLoopActive(loopId: string) {
     const r = db.prepare("SELECT active FROM loops WHERE id = ?").get(loopId) as { active: number } | undefined;
     if (!r) return;
@@ -1144,6 +1194,10 @@ export const repo = {
   getMember(memberId: string): Member | null {
     const r = db.prepare("SELECT * FROM members WHERE id = ?").get(memberId);
     return r ? rowToMember(r) : null;
+  },
+
+  getAllMembers(): Member[] {
+    return (db.prepare("SELECT * FROM members").all() as any[]).map(rowToMember);
   },
 
   /** Finds the member linked to this OAuth identity, or creates one — the
