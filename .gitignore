@@ -8,6 +8,7 @@ out/
 
 # electron-builder output
 apps/desktop/dist/
+apps/desktop/build/server-runtime/
 
 # misc
 .DS_Store

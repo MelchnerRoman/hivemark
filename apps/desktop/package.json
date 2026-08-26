@@ -5,7 +5,7 @@
   "main": "src/main.js",
   "scripts": {
     "dev": "cross-env HIVEMARK_DEV=1 electron .",
-    "build:server": "npm run build --workspace=server && electron-rebuild -f -w better-sqlite3 -m ../server",
+    "build:server": "npm run build --workspace=server && node scripts/bundleServerRuntime.mjs && electron-rebuild -f -w better-sqlite3 -m ./build/server-runtime",
     "build:electron": "npm run build:server && electron-builder"
   },
   "devDependencies": {
@@ -37,7 +37,7 @@
         "to": "server/package.json"
       },
       {
-        "from": "../server/node_modules",
+        "from": "build/server-runtime/node_modules",
         "to": "server/node_modules"
       }
     ],
