@@ -11,8 +11,5 @@
     "dev:desktop": "npm run dev --workspace=desktop",
     "build:web": "npm run build --workspace=web",
     "build:desktop": "npm run build:web && npm run build:electron --workspace=desktop"
-  },
-  "dependencies": {
-    "@rivet-dev/agentos": "^0.2.15"
   }
 }
