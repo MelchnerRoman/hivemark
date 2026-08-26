@@ -118,10 +118,16 @@ export function removeConnection(key: ConnectionKey): Promise<void> {
 }
 
 /** Opens the sync WebSocket and calls `onSync` on every `{type:"sync"}` push,
- * reconnecting with a fixed backoff if the connection drops. Returns a cleanup fn. */
+ * reconnecting with a fixed backoff if the connection drops. Returns a cleanup fn.
+ *
+ * The backend fires a `sync` push on essentially every mutation anywhere in the
+ * workspace, so a burst of closely-spaced mutations (e.g. an agent posting
+ * several messages in a row) can otherwise trigger a full `/api/state` refetch
+ * per push. Debounce on a short trailing edge so a burst collapses into one. */
 export function connectSync(onSync: () => void): () => void {
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
 
   function connect() {
@@ -130,7 +136,10 @@ export function connectSync(onSync: () => void): () => void {
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === "sync") onSync();
+        if (data.type === "sync") {
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(onSync, 150);
+        }
       } catch {
         // ignore malformed frames
       }
@@ -145,6 +154,7 @@ export function connectSync(onSync: () => void): () => void {
   return () => {
     closed = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (debounceTimer) clearTimeout(debounceTimer);
     socket?.close();
   };
 }

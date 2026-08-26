@@ -28,6 +28,21 @@ function tempId(prefix: string) {
 
 let hasHydratedOnce = false;
 
+/** Structural equality for plain JSON data. Used so hydrate() can keep the
+ * previous object/array reference for any slice whose content didn't
+ * actually change, instead of always swapping in the freshly-fetched
+ * object. The backend fires a full resync on essentially every mutation
+ * anywhere in the workspace, so without this every `useStore` selector
+ * (even ones using useShallow or .find()) would see a "changed" reference
+ * and re-render on every unrelated event, since the elements themselves —
+ * not just the containing array — are brand-new objects each fetch. */
+function sameJSON(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+function keepIfSame<T>(prev: T, next: T): T {
+  return sameJSON(prev, next) ? prev : next;
+}
+
 /** Fires a real desktop notification for agent messages that just arrived while
  * this window wasn't focused. Skipped on the very first hydrate (app boot) so
  * loading history doesn't trigger a notification storm. */
@@ -189,20 +204,20 @@ export const useStore = create<Store>((set, get) => ({
     );
     hasHydratedOnce = true;
     set((s) => ({
-      members: state.members,
-      mcpTools: state.mcpTools,
-      rooms: state.rooms,
-      taskRooms: state.taskRooms,
-      messages: state.messages,
-      directMessages: state.directMessages,
-      agents: state.agents,
-      agentTeams: state.agentTeams,
-      agentRuntimes: state.agentRuntimes,
-      agentBehaviorSettings: state.agentBehaviorSettings,
-      agentDefaults: state.agentDefaults,
-      workflows: state.workflows,
-      loops: state.loops,
-      todos: state.todos,
+      members: keepIfSame(s.members, state.members),
+      mcpTools: keepIfSame(s.mcpTools, state.mcpTools),
+      rooms: keepIfSame(s.rooms, state.rooms),
+      taskRooms: keepIfSame(s.taskRooms, state.taskRooms),
+      messages: keepIfSame(s.messages, state.messages),
+      directMessages: keepIfSame(s.directMessages, state.directMessages),
+      agents: keepIfSame(s.agents, state.agents),
+      agentTeams: keepIfSame(s.agentTeams, state.agentTeams),
+      agentRuntimes: keepIfSame(s.agentRuntimes, state.agentRuntimes),
+      agentBehaviorSettings: keepIfSame(s.agentBehaviorSettings, state.agentBehaviorSettings),
+      agentDefaults: keepIfSame(s.agentDefaults, state.agentDefaults),
+      workflows: keepIfSame(s.workflows, state.workflows),
+      loops: keepIfSame(s.loops, state.loops),
+      todos: keepIfSame(s.todos, state.todos),
       selectedRoomId: s.selectedRoomId ?? state.rooms[0]?.id ?? null,
       selectedTaskRoomId:
         s.selectedTaskRoomId ?? state.taskRooms.find((t) => t.roomId === state.rooms[0]?.id)?.id ?? null,
