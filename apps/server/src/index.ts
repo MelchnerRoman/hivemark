@@ -14,6 +14,7 @@ import { MCP_TOOL_SETUP } from "./mcp/setup.js";
 import { closeAgentSession, closeAllAgentSessions, startIdleSessionSweep } from "./mcp/manager.js";
 import {
   getAgentWorkspaceDir,
+  getDmWorkspaceDir,
   getRoomProjectDir,
   listDir,
   listFilesRecursive,
@@ -348,14 +349,12 @@ function downloadFileRoute(dirFn: (req: express.Request<Record<string, string>>)
   });
 }
 
-app.get(
-  "/api/agents/:agentId/files",
-  listFilesRoute((req) => getAgentWorkspaceDir(req.params.agentId))
-);
-app.get(
-  "/api/agents/:agentId/files/download",
-  downloadFileRoute((req) => getAgentWorkspaceDir(req.params.agentId))
-);
+// ?dm=1: the caller's own private DM folder with this agent (never anyone
+// else's — the member comes from the session, not the request).
+const agentFilesDir = (req: express.Request<Record<string, string>>) =>
+  req.query.dm === "1" ? getDmWorkspaceDir(req.params.agentId, req.memberId) : getAgentWorkspaceDir(req.params.agentId);
+app.get("/api/agents/:agentId/files", listFilesRoute(agentFilesDir));
+app.get("/api/agents/:agentId/files/download", downloadFileRoute(agentFilesDir));
 
 // --- room project (the real, shared Finder — every agent and human working
 // in a Room reads/writes the same folder here, see getRoomProjectDir) ---

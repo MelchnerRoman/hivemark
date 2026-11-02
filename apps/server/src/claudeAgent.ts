@@ -387,6 +387,8 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
   // Resolved once and reused for both the shared tool session's directory
   // and the Bash-capable runtimes' cwd — null for a DM turn, which has no Room.
   const roomId = turn.kind === "task_room" ? repo.getTaskRoom(turn.taskRoomId)?.roomId ?? null : null;
+  // A DM's files live in that member's private DM folder (agentSandbox.ts).
+  const dmMemberId = turn.kind === "dm" ? turn.memberId : null;
 
   const grantedToolIds = agent.grants.map((g) => g.toolId);
   // MCP servers and Hivemark's own tools only reach the model on the runtimes
@@ -395,7 +397,7 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
   // would be wasted, and advertising attach_file to them makes them claim
   // attachments that never happen.
   const runsOurTools = runtime === "runtime-hivemark" || runtime === "runtime-openrouter";
-  const { session, tools: mcpTools } = await getSessionForAgent(agentId, runsOurTools ? grantedToolIds : [], roomId);
+  const { session, tools: mcpTools } = await getSessionForAgent(agentId, runsOurTools ? grantedToolIds : [], roomId, dmMemberId);
   const bridged = runtime === "runtime-claude-code";
   const workspace =
     (runsOurTools || bridged) && turn.kind === "task_room" && roomId
@@ -451,10 +453,10 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
         finalText = await runOpenRouterTurn(agent, system, history, callTool, tools, signal);
         break;
       case "runtime-claude-code":
-        finalText = await runClaudeCodeTurn(agent, system, history, roomId, signal, turnToken);
+        finalText = await runClaudeCodeTurn(agent, system, history, roomId, signal, turnToken, dmMemberId);
         break;
       case "runtime-codex":
-        finalText = await runCodexTurn(agent, system, history, roomId, signal);
+        finalText = await runCodexTurn(agent, system, history, roomId, signal, dmMemberId);
         break;
       case "runtime-goose":
         finalText = await runGooseTurn(agent, system, history, signal);

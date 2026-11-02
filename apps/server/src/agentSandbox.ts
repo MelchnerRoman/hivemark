@@ -35,6 +35,15 @@ export function getAgentWorkspaceDir(agentId: string): string {
   return dir;
 }
 
+/** A member's private DM folder with an agent — outside the agent's own
+ * folder above (which room turns can reach and any room member can browse),
+ * so a file from one person's DM never surfaces in a room or another DM. */
+export function getDmWorkspaceDir(agentId: string, memberId: string): string {
+  const dir = path.join(DATA_DIR, "dm-workspaces", safeId(agentId), safeId(memberId));
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 /** One folder shared by every agent AND every human working in a Room —
  * the actual collaborative project (e.g. a website multiple agents build
  * together), as opposed to an agent's private scratch space above. */

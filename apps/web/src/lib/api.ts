@@ -329,8 +329,9 @@ export function installMcpTool(toolId: string): Promise<void> {
 }
 
 // --- files ---
-export function listAgentFiles(agentId: string): Promise<FileListing> {
-  return request(`/api/agents/${agentId}/files`);
+/** dm: your own private DM folder with the agent instead of its room scratch folder. */
+export function listAgentFiles(agentId: string, dm = false): Promise<FileListing> {
+  return request(`/api/agents/${agentId}/files${dm ? "?dm=1" : ""}`);
 }
 /** Downloads via fetch (not a plain `<a href>`) so the auth bearer token is
  * sent — a bare link wouldn't carry it when real multi-user auth is on. */
@@ -346,9 +347,9 @@ async function downloadViaUrl(url: string, suggestedName: string): Promise<void>
   a.click();
   URL.revokeObjectURL(objectUrl);
 }
-export function downloadAgentFile(agentId: string, path: string): Promise<void> {
+export function downloadAgentFile(agentId: string, path: string, dm = false): Promise<void> {
   return downloadViaUrl(
-    `${BACKEND_URL}/api/agents/${agentId}/files/download?path=${encodeURIComponent(path)}`,
+    `${BACKEND_URL}/api/agents/${agentId}/files/download?path=${encodeURIComponent(path)}${dm ? "&dm=1" : ""}`,
     path.split("/").pop()!
   );
 }

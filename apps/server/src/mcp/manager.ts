@@ -31,7 +31,7 @@ export class ToolSession {
     return this.healthy;
   }
 
-  async connect(mcpToolIds: string[], agentId: string, roomId: string | null): Promise<AnthropicToolDef[]> {
+  async connect(mcpToolIds: string[], agentId: string, roomId: string | null, dmMemberId: string | null = null): Promise<AnthropicToolDef[]> {
     const defs: AnthropicToolDef[] = [];
     for (const mcpToolId of mcpToolIds) {
       const config = MCP_TOOL_REGISTRY[mcpToolId];
@@ -55,7 +55,7 @@ export class ToolSession {
               })
             : new StdioClientTransport({
                 command: config.command,
-                args: config.args(credential, agentId, roomId),
+                args: config.args(credential, agentId, roomId, dmMemberId),
                 env: { ...processEnvSubset(), ...(config.env ? config.env(credential) : {}) },
                 stderr: "ignore",
               });
@@ -151,8 +151,9 @@ const sessionsByAgent = new Map<string, CachedSession>();
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60_000;
 const SESSION_SWEEP_INTERVAL_MS = 60_000;
 
-function sessionKey(agentId: string, roomId: string | null): string {
-  return `${agentId}::${roomId ?? "dm"}`;
+// One session per Room, and one per member's DM (each has its own folder).
+function sessionKey(agentId: string, roomId: string | null, dmMemberId: string | null): string {
+  return `${agentId}::${roomId ?? `dm:${dmMemberId}`}`;
 }
 
 function sameToolIds(a: string[], b: string[]): boolean {
@@ -164,9 +165,10 @@ function sameToolIds(a: string[], b: string[]): boolean {
 export async function getSessionForAgent(
   agentId: string,
   mcpToolIds: string[],
-  roomId: string | null
+  roomId: string | null,
+  dmMemberId: string | null = null
 ): Promise<{ session: ToolSession; tools: AnthropicToolDef[] }> {
-  const key = sessionKey(agentId, roomId);
+  const key = sessionKey(agentId, roomId, dmMemberId);
   const cached = sessionsByAgent.get(key);
   if (cached && cached.session.isHealthy && sameToolIds(cached.toolIds, mcpToolIds)) {
     cached.lastUsedAt = Date.now();
@@ -175,7 +177,7 @@ export async function getSessionForAgent(
   if (cached) await cached.session.close();
 
   const session = new ToolSession();
-  const tools = await session.connect(mcpToolIds, agentId, roomId);
+  const tools = await session.connect(mcpToolIds, agentId, roomId, dmMemberId);
   sessionsByAgent.set(key, { session, toolIds: [...mcpToolIds], tools, lastUsedAt: Date.now() });
   return { session, tools };
 }

@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { Writable, Readable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
-import { getAgentWorkspaceDir, getRoomProjectDir, hasBashAccess } from "./agentSandbox.js";
+import { getAgentWorkspaceDir, getDmWorkspaceDir, getRoomProjectDir, hasBashAccess } from "./agentSandbox.js";
 import type { Agent } from "./types.js";
 import type { HistoryMessage } from "./claudeAgent.js";
 
@@ -86,10 +86,17 @@ export async function runCodexTurn(
   system: string,
   history: HistoryMessage[],
   roomId: string | null,
-  signal: AbortSignal
+  signal: AbortSignal,
+  dmMemberId: string | null = null
 ): Promise<string> {
   const bashAccess = hasBashAccess(agent);
-  const workspaceDir = bashAccess ? (roomId ? getRoomProjectDir(roomId) : getAgentWorkspaceDir(agent.id)) : undefined;
+  const workspaceDir = bashAccess
+    ? roomId
+      ? getRoomProjectDir(roomId)
+      : dmMemberId
+        ? getDmWorkspaceDir(agent.id, dmMemberId)
+        : getAgentWorkspaceDir(agent.id)
+    : undefined;
   const textChunks: string[] = [];
   const { child, out, connection } = startCodex(
     {

@@ -226,13 +226,13 @@ function ProjectFinder({ roomId }: { roomId: string }) {
   );
 }
 
-function AgentFiles({ agentId, agentName }: { agentId: string; agentName: string }) {
+export function AgentFiles({ agentId, title, dm = false }: { agentId: string; title: string; dm?: boolean }) {
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState<SharedFile[] | null>(null);
 
   function toggle() {
     if (!open && files === null) {
-      listAgentFiles(agentId).then((listing) => setFiles(listing.files));
+      listAgentFiles(agentId, dm).then((listing) => setFiles(listing.files));
     }
     setOpen(!open);
   }
@@ -240,7 +240,7 @@ function AgentFiles({ agentId, agentName }: { agentId: string; agentName: string
   return (
     <div className="rounded-xl border border-border bg-surface p-4">
       <button onClick={toggle} className="flex w-full items-center justify-between text-left">
-        <span className="text-sm font-medium">{agentName}&apos;s private workspace</span>
+        <span className="text-sm font-medium">{title}</span>
         <span className="text-xs text-foreground-muted">{open ? "Hide" : "Show files"}</span>
       </button>
       {open && (
@@ -258,7 +258,7 @@ function AgentFiles({ agentId, agentName }: { agentId: string; agentName: string
                   {formatSize(file.size)} · {new Date(file.modifiedAt).toLocaleString()}
                 </p>
               </div>
-              <Button variant="secondary" className="text-xs" onClick={() => downloadAgentFile(agentId, file.path)}>
+              <Button variant="secondary" className="text-xs" onClick={() => downloadAgentFile(agentId, file.path, dm)}>
                 Download
               </Button>
             </div>
@@ -286,7 +286,7 @@ export function FilesPanel({ roomId }: { roomId: string }) {
       </h3>
       <div className="space-y-2">
         {agents.map((agent) => (
-          <AgentFiles key={agent.id} agentId={agent.id} agentName={agent.name} />
+          <AgentFiles key={agent.id} agentId={agent.id} title={`${agent.name}'s private workspace`} />
         ))}
         {agents.length === 0 && <p className="text-sm text-foreground-muted">No agents yet.</p>}
       </div>

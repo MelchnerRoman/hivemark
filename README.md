@@ -88,7 +88,7 @@ The Claude Code runtime card in Settings → Agent runtimes shows whether the `c
 **Using a Claude subscription instead of API credits:** pick the Claude Code runtime (per agent, or as the default in Settings → Agent runtimes) and sign in there with your Pro/Max account. Hivemark's grants map onto Claude Code's own tools: in a Task Room it can always read the Room's project folder (so it sees attached images/PDFs), "Files" adds Write/Edit there, "Web research" adds WebSearch/WebFetch, and Bash still needs the server-wide opt-in. The built-in `attach_file` / `generate_image` / todo tools and granted MCP tools (Browser, GitHub, ...) are passed to Claude Code too (`--mcp-config`, with `--strict-mcp-config` so your personal Claude Code MCP servers never load into an agent). Subscriptions are personal: on a shared self-hosted server every Claude Code agent runs on the one login of the server machine, so teams should use API keys there.
 
 
-Codex and Goose don't use Hivemark's MCP tools. Codex's tool-call permission requests are auto-denied unless the server runs with `ENABLE_AGENT_TOOL_ACCESS=1` **and** the agent is granted "bash-access" — then Codex (like Claude Code's Bash) runs confined to the Room's shared project folder, or the agent's private workspace in a DM. See `apps/server/src/agentSandbox.ts`.
+Codex and Goose don't use Hivemark's MCP tools. Codex's tool-call permission requests are auto-denied unless the server runs with `ENABLE_AGENT_TOOL_ACCESS=1` **and** the agent is granted "bash-access" — then Codex (like Claude Code's Bash) runs confined to the Room's shared project folder, or in a DM to that person's private DM folder. See `apps/server/src/agentSandbox.ts`.
 
 ## MCP tools
 
@@ -98,7 +98,7 @@ Agents can be granted tools from the MCP catalog:
 - **Browser** — spawns the real `@playwright/mcp` server, no credentials needed (but you need `npx playwright install chromium` once for it to actually control a browser).
 - **GitHub**, **Postgres**, **Slack** — spawn real MCP servers over stdio (`@modelcontextprotocol/server-github`, `server-postgres`, `slack-mcp-server`), gated on the matching Connections credential.
 - **Linear** — Linear's hosted MCP server (`mcp.linear.app`) over Streamable HTTP, using the Linear API key.
-- **Files** — the official filesystem MCP server, confined to the Room's shared project folder and the agent's private workspace.
+- **Files** — the official filesystem MCP server, confined to the Room's shared project folder and the agent's own workspace. In a DM it reaches only that person's private DM folder (`data/dm-workspaces/<agent>/<member>`), so files from a private chat never show up in a room or in someone else's DM; the DM view lists them for that person only.
 - **Preview** — lets an agent start/stop its Room's live preview; only available when the server runs with `ENABLE_AGENT_TOOL_ACCESS=1`.
 
 ## Loops

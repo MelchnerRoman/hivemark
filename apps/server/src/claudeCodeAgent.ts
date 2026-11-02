@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { repo } from "./db.js";
 import { resolveModelId } from "./modelIds.js";
-import { getAgentWorkspaceDir, getRoomProjectDir, hasBashAccess, TOOL_ACCESS_ENABLED } from "./agentSandbox.js";
+import { getAgentWorkspaceDir, getDmWorkspaceDir, getRoomProjectDir, hasBashAccess, TOOL_ACCESS_ENABLED } from "./agentSandbox.js";
 import { firstPartyServer, MCP_TOOL_REGISTRY } from "./mcp/registry.js";
 import type { Agent } from "./types.js";
 import type { HistoryMessage } from "./claudeAgent.js";
@@ -49,7 +49,7 @@ function mcpServersFor(agent: Agent, roomId: string | null, turnToken: string | 
         : {
             type: "stdio",
             command: config.command,
-            args: config.args(credential, agent.id, roomId),
+            args: config.args(credential, agent.id, roomId, null), // filesystem is skipped above
             env: { ...baseEnv(), ...(config.env?.(credential) ?? {}) },
           };
   }
@@ -83,16 +83,23 @@ export function runClaudeCodeTurn(
   history: HistoryMessage[],
   roomId: string | null,
   signal: AbortSignal,
-  turnToken: string | null
+  turnToken: string | null,
+  dmMemberId: string | null = null
 ): Promise<string> {
   const transcript = history.map((m) => `${m.role === "assistant" ? "You" : "Message"}: ${m.content}`).join("\n\n");
   const prompt = `${transcript}\n\nRespond with your next message only, no preamble.`;
 
   const bashAccess = hasBashAccess(agent);
   const granted = (toolId: string) => agent.grants.some((g) => g.toolId === toolId);
-  // Without Bash, file tools only make sense inside a Room's project folder
-  // (that's where attachments and deliverables live); a DM gets none.
-  const workspaceDir = roomId ? getRoomProjectDir(roomId) : bashAccess ? getAgentWorkspaceDir(agent.id) : null;
+  // The Room's project folder (attachments, deliverables), or in a DM that
+  // member's private DM folder — never shared with a room or another DM.
+  const workspaceDir = roomId
+    ? getRoomProjectDir(roomId)
+    : dmMemberId
+      ? getDmWorkspaceDir(agent.id, dmMemberId)
+      : bashAccess
+        ? getAgentWorkspaceDir(agent.id)
+        : null;
   const tools = bashAccess
     ? [...BASH_TOOLS]
     : workspaceDir

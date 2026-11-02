@@ -8,6 +8,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { MessageRow } from "@/components/workspace/MessageRow";
+import { AgentFiles } from "@/components/workspace/FilesPanel";
 import { useStickToBottom } from "@/lib/useStickToBottom";
 
 export function DirectMessageView() {
@@ -49,6 +50,9 @@ export function DirectMessageView() {
           </div>
         </div>
       </header>
+      <div className="border-b border-border px-6 py-3">
+        <AgentFiles key={agent.id} agentId={agent.id} dm title="Files from this chat (only you can see them)" />
+      </div>
 
       <div ref={ref} onScroll={onScroll} className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
         {messages.map((m) => {
@@ -73,7 +77,7 @@ export function DirectMessageView() {
         })}
         {messages.length === 0 && (
           <p className="pt-10 text-center text-sm text-foreground-muted">
-            Send {agent.name} a direct message &mdash; it only sees this conversation, not any Task Room chat.
+            {`Send ${agent.name} a direct message — it only sees this conversation, not any Task Room chat.`}
           </p>
         )}
       </div>

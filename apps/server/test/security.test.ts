@@ -1,5 +1,7 @@
 // Regression tests for security fixes. Run: npm test --workspace=server
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { after, before, describe, test } from "node:test";
 import { addMember, PNG, rawGet, startMockAnthropic, startServer, waitFor, type MockAnthropic, type TestServer } from "./helpers.ts";
 
@@ -226,6 +228,20 @@ describe("auth enabled (multi-user)", () => {
     // and a forged scope is just ignored (full state, still scoped)
     const forged = await state("out", { seq: outAfter.sync.seq, scope: `owner:m-owner` });
     assert.equal(forged.sync.delta, false);
+  });
+
+  test("files from a DM are private to that member; room files aren't affected", async () => {
+    const dmDir = path.join(s.dataDir, "dm-workspaces", agentId, "m-in");
+    fs.mkdirSync(dmDir, { recursive: true });
+    fs.writeFileSync(path.join(dmDir, "dm-secret.txt"), "only m-in");
+    const list = async (as: string, dm: boolean) =>
+      (await (await s.req(`/api/agents/${agentId}/files${dm ? "?dm=1" : ""}`, { as })).json()).files.map((f: { path: string }) => f.path);
+    assert.deepEqual(await list("in", true), ["dm-secret.txt"]);
+    assert.deepEqual(await list("own", true), [], "not even the owner");
+    assert.ok(!(await list("in", false)).includes("dm-secret.txt"), "not in the agent's shared workspace");
+    const dl = (as: string) => s.req(`/api/agents/${agentId}/files/download?path=dm-secret.txt&dm=1`, { as });
+    assert.equal((await dl("in")).status, 200);
+    assert.equal((await dl("own")).status, 404);
   });
 
   test("login CSRF: OAuth callback needs the state cookie of this browser", async () => {

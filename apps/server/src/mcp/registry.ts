@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { ConnectionKey } from "../types.js";
-import { getAgentWorkspaceDir, getRoomProjectDir } from "../agentSandbox.js";
+import { getAgentWorkspaceDir, getDmWorkspaceDir, getRoomProjectDir } from "../agentSandbox.js";
 import { INTERNAL_TOKEN } from "../internalAuth.js";
 
 /**
@@ -13,7 +13,8 @@ export type StdioToolConfig = {
   kind: "stdio";
   connectionKey: ConnectionKey | null; // null = no credential required (e.g. browser)
   command: string;
-  args: (credential: string | null, agentId: string, roomId: string | null) => string[];
+  /** dmMemberId: set on a DM turn (roomId is then null). */
+  args: (credential: string | null, agentId: string, roomId: string | null, dmMemberId: string | null) => string[];
   env?: (credential: string | null) => Record<string, string>;
 };
 
@@ -95,11 +96,13 @@ export const MCP_TOOL_REGISTRY: Record<string, StdioToolConfig | HttpToolConfig>
     // with the private dir first, agents silently wrote into their private
     // folder despite reporting success — reordering fixes the default
     // without needing every agent to always pass an absolute path.
-    args: (_credential, agentId, roomId) => [
+    // In a DM: only that member's private DM folder.
+    args: (_credential, agentId, roomId, dmMemberId) => [
       "-y",
       "@modelcontextprotocol/server-filesystem",
-      ...(roomId ? [getRoomProjectDir(roomId)] : []),
-      getAgentWorkspaceDir(agentId),
+      ...(dmMemberId
+        ? [getDmWorkspaceDir(agentId, dmMemberId)]
+        : [...(roomId ? [getRoomProjectDir(roomId)] : []), getAgentWorkspaceDir(agentId)]),
     ],
   },
   // Our own first-party tool (not a third-party package, unlike every other
