@@ -4,8 +4,7 @@ import { getAgentWorkspaceDir, getRoomProjectDir } from "../agentSandbox.js";
 import { INTERNAL_TOKEN } from "../internalAuth.js";
 
 /**
- * Static config for each entry in our MCP tool catalog (mcp-github, mcp-linear,
- * mcp-postgres, mcp-browser, mcp-slack). Two shapes:
+ * Static config for each entry in our MCP tool catalog. Two shapes:
  *  - "stdio": a real MCP server we spawn as a local process (via @modelcontextprotocol/sdk).
  *  - "http": a real MCP server hosted remotely, spoken to over Streamable HTTP
  *    (e.g. Linear's official mcp.linear.app endpoint).
