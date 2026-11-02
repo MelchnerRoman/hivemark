@@ -1,6 +1,7 @@
 "use client";
 
 import { useStore } from "@/lib/store";
+import { TASK_ROOM_STATUS_LABEL, TASK_ROOM_STATUS_TONE } from "@/lib/display";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
 import type { WorkspaceTab } from "@/lib/types";
@@ -21,18 +22,6 @@ const TABS: { id: WorkspaceTab; label: string; icon: string }[] = [
   { id: "files", label: "Files", icon: "📁" },
   { id: "preview", label: "Preview", icon: "🌐" },
 ];
-
-const statusTone: Record<string, "neutral" | "brand" | "accent"> = {
-  open: "neutral",
-  in_progress: "brand",
-  done: "accent",
-};
-
-const statusLabel: Record<string, string> = {
-  open: "Open",
-  in_progress: "In progress",
-  done: "Done",
-};
 
 export function TaskRoomWorkspace() {
   const taskRoom = useStore((s) => s.taskRooms.find((t) => t.id === s.selectedTaskRoomId));
@@ -75,7 +64,7 @@ export function TaskRoomWorkspace() {
             <h2 className="font-display text-base font-semibold">
               {taskRoom.emoji} {taskRoom.name}
             </h2>
-            <Badge tone={statusTone[taskRoom.status]}>{statusLabel[taskRoom.status]}</Badge>
+            <Badge tone={TASK_ROOM_STATUS_TONE[taskRoom.status]}>{TASK_ROOM_STATUS_LABEL[taskRoom.status]}</Badge>
           </div>
           <div className="mt-1.5 flex -space-x-1.5">
             {assignees.map((m) => (

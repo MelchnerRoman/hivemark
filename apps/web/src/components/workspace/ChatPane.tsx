@@ -3,15 +3,12 @@
 import { FormEvent, KeyboardEvent, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/lib/store";
+import { formatTime } from "@/lib/display";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { downloadRoomFile, isImagePath, uploadRoomFile } from "@/lib/api";
 import { AuthImage } from "@/components/ui/AuthImage";
 import type { Agent } from "@/lib/types";
-
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
 
 // Matches an "@" that starts a mention-in-progress at the end of the draft,
 // e.g. "hey @Ons" -> captures "Ons". No match once a space follows the "@".

@@ -3,19 +3,10 @@
 import { FormEvent, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/lib/store";
+import { AGENT_STATUS_TONE, formatTime } from "@/lib/display";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-const statusTone: Record<string, "neutral" | "brand" | "danger"> = {
-  idle: "neutral",
-  running: "brand",
-  error: "danger",
-};
 
 export function DirectMessageView() {
   const agentId = useStore((s) => s.selectedDmAgentId);
@@ -52,7 +43,7 @@ export function DirectMessageView() {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="font-display text-base font-semibold">{agent.name}</h2>
-              <Badge tone={statusTone[agent.status]}>{agent.status}</Badge>
+              <Badge tone={AGENT_STATUS_TONE[agent.status]}>{agent.status}</Badge>
             </div>
             <button
               onClick={() => goToAgentInContext(agent.id)}

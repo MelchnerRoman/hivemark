@@ -4,6 +4,7 @@ import { modelProvider } from "@/lib/agent-constants";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/lib/store";
+import { AGENT_STATUS_TONE } from "@/lib/display";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -11,12 +12,6 @@ import { CreateAgentModal } from "@/components/modals/CreateAgentModal";
 import { RuntimeSelect } from "@/components/agents/RuntimeSelect";
 import { ModelInput } from "@/components/agents/ModelInput";
 import type { Agent } from "@/lib/types";
-
-const statusTone: Record<string, "neutral" | "brand" | "danger"> = {
-  idle: "neutral",
-  running: "brand",
-  error: "danger",
-};
 
 const BASH_ACCESS_TOOL_ID = "bash-access";
 const BASH_CAPABLE_RUNTIMES = ["runtime-claude-code", "runtime-codex"];
@@ -55,7 +50,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                   <div>
                     <div className="flex items-center gap-2">
                       <h3 className="font-display text-sm font-semibold">{agent.name}</h3>
-                      <Badge tone={statusTone[agent.status]}>{agent.status}</Badge>
+                      <Badge tone={AGENT_STATUS_TONE[agent.status]}>{agent.status}</Badge>
                     </div>
                     <p className="text-xs text-foreground-muted">
                       {agent.model} · Created by {creator?.name ?? "someone"}

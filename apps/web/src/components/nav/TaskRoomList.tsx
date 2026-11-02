@@ -2,22 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
+import { TASK_ROOM_STATUS_LABEL, TASK_ROOM_STATUS_TONE } from "@/lib/display";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
 import { CreateTaskRoomModal } from "@/components/modals/CreateTaskRoomModal";
 import type { TaskRoomStatus } from "@/lib/types";
-
-const statusTone: Record<TaskRoomStatus, "neutral" | "brand" | "accent"> = {
-  open: "neutral",
-  in_progress: "brand",
-  done: "accent",
-};
-
-const statusLabel: Record<TaskRoomStatus, string> = {
-  open: "Open",
-  in_progress: "In progress",
-  done: "Done",
-};
 
 const STATUS_OPTIONS: TaskRoomStatus[] = ["open", "in_progress", "done"];
 
@@ -120,7 +109,7 @@ export function TaskRoomList() {
                     aria-expanded={menuOpen}
                     title="Change status"
                   >
-                    <Badge tone={statusTone[tr.status]}>{statusLabel[tr.status]}</Badge>
+                    <Badge tone={TASK_ROOM_STATUS_TONE[tr.status]}>{TASK_ROOM_STATUS_LABEL[tr.status]}</Badge>
                   </button>
                   {menuOpen && (
                     <div
@@ -143,7 +132,7 @@ export function TaskRoomList() {
                               : "text-foreground hover:bg-surface-raised"
                           }`}
                         >
-                          {statusLabel[status]}
+                          {TASK_ROOM_STATUS_LABEL[status]}
                         </button>
                       ))}
                     </div>
