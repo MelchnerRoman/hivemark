@@ -48,7 +48,7 @@ export function AgentsGalleryView() {
 
   return (
     <div className="flex-1 overflow-y-auto px-8 py-6">
-      <div className="mb-6 flex items-start justify-between">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl font-semibold">Agents</h1>
           <p className="mt-1 text-sm text-foreground-muted">

@@ -48,15 +48,17 @@ export function TodosPanel({ taskRoomId }: { taskRoomId: string }) {
   const done = todos.filter((t) => t.done);
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-4">
-      <form onSubmit={handleSubmit} noValidate className="mb-3 flex flex-col gap-2 sm:flex-row">
+    <div className="@container h-full overflow-y-auto px-6 py-4">
+      <form onSubmit={handleSubmit} noValidate className="mb-3 flex flex-col gap-2 @xl:flex-row">
         <input
+          aria-label="New todo"
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Add a todo…"
           className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
         />
         <input
+          aria-label="Due date"
           type="date"
           value={dueDate}
           onChange={(e) => setDueDate(e.target.value)}
@@ -64,6 +66,7 @@ export function TodosPanel({ taskRoomId }: { taskRoomId: string }) {
           className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-brand"
         />
         <select
+          aria-label="Assignee"
           value={assigneeId}
           onChange={(e) => setAssigneeId(e.target.value)}
           className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"

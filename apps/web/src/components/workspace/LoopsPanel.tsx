@@ -31,15 +31,17 @@ export function LoopsPanel({ taskRoomId }: { taskRoomId: string }) {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-4">
-      <form onSubmit={handleCreate} className="mb-5 flex flex-col gap-2 sm:flex-row">
+    <div className="@container h-full overflow-y-auto px-6 py-4">
+      <form onSubmit={handleCreate} className="mb-5 flex flex-col gap-2 @xl:flex-row">
         <input
+          aria-label="New loop name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="New loop name…"
           className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
         />
         <select
+          aria-label="Schedule"
           value={schedule}
           onChange={(e) => setSchedule(e.target.value)}
           className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
@@ -53,6 +55,7 @@ export function LoopsPanel({ taskRoomId }: { taskRoomId: string }) {
         </select>
         {isCustom && (
           <input
+            aria-label="Custom cron schedule"
             value={customSchedule}
             onChange={(e) => setCustomSchedule(e.target.value)}
             placeholder="e.g. 0 9 * * 1-5"

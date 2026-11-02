@@ -41,7 +41,7 @@ export function TaskRoomList() {
 
   if (!room) {
     return (
-      <div className="flex w-72 shrink-0 items-center justify-center border-r border-border bg-background p-6 text-center text-sm text-foreground-muted">
+      <div className="flex w-56 shrink-0 lg:w-72 items-center justify-center border-r border-border bg-background p-6 text-center text-sm text-foreground-muted">
         Select a room to see its Task Rooms.
       </div>
     );
@@ -50,7 +50,7 @@ export function TaskRoomList() {
   const roomTaskRooms = taskRooms.filter((t) => t.roomId === room.id);
 
   return (
-    <div className="flex w-72 shrink-0 flex-col border-r border-border bg-background">
+    <div className="flex w-56 shrink-0 lg:w-72 flex-col border-r border-border bg-background">
       <div className="flex items-center justify-between px-4 py-4">
         <div>
           <h1 className="font-display text-sm font-semibold">

@@ -74,12 +74,12 @@ export function TaskRoomWorkspace() {
         </div>
       </header>
 
-      <nav className="flex gap-1 border-b border-border px-4 pt-2">
+      <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-4 pt-2">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-1.5 rounded-t-lg px-3 py-2 text-sm font-medium transition-colors ${
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-lg px-3 py-2 text-sm font-medium transition-colors ${
               activeTab === tab.id
                 ? "border-b-2 border-brand text-brand"
                 : "text-foreground-muted hover:text-foreground"
