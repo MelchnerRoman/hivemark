@@ -762,8 +762,10 @@ const stmtActiveLoops = db.prepare("SELECT * FROM loops WHERE active = 1");
 
 export const repo = {
   /** Everything, except DMs: only `dmMemberId`'s own threads (DMs are
-   * private — loading every member's just to filter them out was wasted). */
-  getState(dmMemberId: string): AppState {
+   * private — loading every member's just to filter them out was wasted).
+   * withMessages=false skips the biggest table for a caller that loads only
+   * the task rooms it can see (getScopedState). */
+  getState(dmMemberId: string, withMessages = true): AppState {
     return {
       members: (db.prepare("SELECT * FROM members").all() as any[]).map(rowToMember),
       mcpTools: (db.prepare("SELECT * FROM mcp_tools").all() as any[]).map(
@@ -774,7 +776,9 @@ export const repo = {
         return (db.prepare("SELECT * FROM rooms").all() as any[]).map((r) => rowToRoom(r, byRoom));
       })(),
       taskRooms: (db.prepare("SELECT * FROM task_rooms").all() as any[]).map(rowToTaskRoom),
-      messages: (db.prepare("SELECT * FROM messages ORDER BY created_at ASC").all() as any[]).map(rowToMessage),
+      messages: withMessages
+        ? (db.prepare("SELECT * FROM messages ORDER BY created_at ASC").all() as any[]).map(rowToMessage)
+        : [],
       directMessages: (
         db.prepare("SELECT * FROM direct_messages WHERE member_id = ? ORDER BY created_at ASC").all(dmMemberId) as any[]
       ).map(rowToDm),
@@ -814,8 +818,8 @@ export const repo = {
    * the same rule as isTaskRoomMember/canSeeAgent, minus their per-agent and
    * per-DM queries (thousands per request for a non-owner). */
   getScopedState(callerId: string): AppState {
-    const full = repo.getState(callerId);
-    if (repo.getMemberRole(callerId) === "owner") return full;
+    if (repo.getMemberRole(callerId) === "owner") return repo.getState(callerId);
+    const full = repo.getState(callerId, false);
 
     const visibleRoomIds = new Set(full.rooms.filter((r) => r.memberIds.includes(callerId)).map((r) => r.id));
     const visibleTaskRoomIds = new Set(
@@ -835,7 +839,13 @@ export const repo = {
         .filter((r) => visibleRoomIds.has(r.id))
         .map((r) => ({ ...r, taskRoomIds: r.taskRoomIds.filter((id) => visibleTaskRoomIds.has(id)) })),
       taskRooms: full.taskRooms.filter((t) => visibleTaskRoomIds.has(t.id)),
-      messages: full.messages.filter((m) => visibleTaskRoomIds.has(m.taskRoomId)),
+      messages: (
+        db
+          .prepare(
+            "SELECT * FROM messages WHERE task_room_id IN (SELECT value FROM json_each(?)) ORDER BY created_at ASC"
+          )
+          .all(JSON.stringify([...visibleTaskRoomIds])) as any[]
+      ).map(rowToMessage),
       agents,
       directMessages: full.directMessages.filter((dm) => visibleAgentIds.has(dm.agentId)),
       workflows: full.workflows.filter((w) => visibleTaskRoomIds.has(w.taskRoomId)),
