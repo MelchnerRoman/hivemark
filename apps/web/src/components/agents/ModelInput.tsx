@@ -20,22 +20,25 @@ export function ModelInput({
   label?: string;
 }) {
   const provider = modelProvider(runtimeId);
-  const [models, setModels] = useState<string[]>([]);
+  // Tagged with its provider: right after a runtime switch the previous
+  // provider's list is still in state, and must not be auto-picked from.
+  const [loaded, setLoaded] = useState<{ provider: string; models: string[] }>({ provider, models: [] });
+  const models = loaded.provider === provider ? loaded.models : [];
 
   useEffect(() => {
     let live = true;
-    setModels([]);
     fetchModels(provider)
       .catch(() => [])
-      .then((m) => live && setModels(m.length || provider !== "anthropic" ? m : [...AGENT_MODEL_OPTIONS]));
+      .then((m) => live && setLoaded({ provider, models: m.length || provider !== "anthropic" ? m : [...AGENT_MODEL_OPTIONS] }));
     return () => {
       live = false;
     };
   }, [provider]);
 
   useEffect(() => {
-    if (!value && provider === "anthropic" && models.length) onChange(models.find((m) => /sonnet/i.test(m)) ?? models[0]);
-  }, [value, provider, models, onChange]);
+    const list = loaded.provider === provider ? loaded.models : [];
+    if (!value && provider === "anthropic" && list.length) onChange(list.find((m) => /sonnet/i.test(m)) ?? list[0]);
+  }, [value, provider, loaded, onChange]);
 
   if (provider === "openrouter") {
     return (
