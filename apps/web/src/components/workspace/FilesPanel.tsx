@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import {
   createRoomFile,
@@ -8,11 +8,14 @@ import {
   downloadAgentFile,
   downloadRoomFile,
   getRoomFileContent,
+  isImagePath,
   listAgentFiles,
   listRoomFiles,
   renameRoomFile,
+  uploadRoomFile,
 } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
+import { AuthImage } from "@/components/ui/AuthImage";
 import type { DirEntry, FileContent, SharedFile } from "@/lib/types";
 
 function formatSize(bytes: number): string {
@@ -34,6 +37,7 @@ function ProjectFinder({ roomId }: { roomId: string }) {
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewContent, setPreviewContent] = useState<FileContent | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const uploadInput = useRef<HTMLInputElement>(null);
 
   function refresh() {
     setError(null);
@@ -44,6 +48,17 @@ function ProjectFinder({ roomId }: { roomId: string }) {
 
   useEffect(refresh, [roomId, currentDir]);
 
+  /** Runs a mutation, then refreshes — or surfaces its error (refresh() would
+   * otherwise clear it right away). */
+  async function run(action: Promise<unknown>) {
+    try {
+      await action;
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   function openEntry(entry: DirEntry) {
     const path = joinPath(currentDir, entry.name);
     if (entry.type === "dir") {
@@ -52,40 +67,52 @@ function ProjectFinder({ roomId }: { roomId: string }) {
       setPreviewContent(null);
     } else {
       setPreviewPath(path);
-      getRoomFileContent(roomId, path).then(setPreviewContent);
+      setPreviewContent(null);
+      getRoomFileContent(roomId, path)
+        .then(setPreviewContent)
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
   }
 
   async function handleNewFolder() {
     const name = window.prompt("New folder name:");
     if (!name) return;
-    await createRoomFile(roomId, joinPath(currentDir, name), "dir");
-    refresh();
+    await run(createRoomFile(roomId, joinPath(currentDir, name), "dir"));
   }
 
   async function handleNewFile() {
     const name = window.prompt("New file name:");
     if (!name) return;
-    await createRoomFile(roomId, joinPath(currentDir, name), "file");
-    refresh();
+    await run(createRoomFile(roomId, joinPath(currentDir, name), "file"));
+  }
+
+  async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
+    const files = [...(e.target.files ?? [])].filter(
+      // The upload route silently overwrites — ask before clobbering a file.
+      (file) => !entries?.some((x) => x.name === file.name) || window.confirm(`Replace existing "${file.name}"?`)
+    );
+    e.target.value = "";
+    await run(
+      (async () => {
+        for (const file of files) await uploadRoomFile(roomId, joinPath(currentDir, file.name), file);
+      })()
+    );
   }
 
   async function handleDelete(entry: DirEntry) {
     const path = joinPath(currentDir, entry.name);
     if (!window.confirm(`Delete "${entry.name}"? This can't be undone.`)) return;
-    await deleteRoomFile(roomId, path);
+    await run(deleteRoomFile(roomId, path));
     if (previewPath === path) {
       setPreviewPath(null);
       setPreviewContent(null);
     }
-    refresh();
   }
 
   async function handleRename(entry: DirEntry) {
     const newName = window.prompt("Rename to:", entry.name);
     if (!newName || newName === entry.name) return;
-    await renameRoomFile(roomId, joinPath(currentDir, entry.name), joinPath(currentDir, newName));
-    refresh();
+    await run(renameRoomFile(roomId, joinPath(currentDir, entry.name), joinPath(currentDir, newName)));
   }
 
   const crumbs = currentDir ? currentDir.split("/") : [];
@@ -110,6 +137,10 @@ function ProjectFinder({ roomId }: { roomId: string }) {
           ))}
         </div>
         <div className="flex gap-2">
+          <input ref={uploadInput} type="file" multiple hidden onChange={handleUpload} />
+          <Button variant="secondary" className="text-xs" onClick={() => uploadInput.current?.click()}>
+            Upload
+          </Button>
           <Button variant="secondary" className="text-xs" onClick={handleNewFolder}>
             New folder
           </Button>
@@ -172,13 +203,17 @@ function ProjectFinder({ roomId }: { roomId: string }) {
               Close
             </button>
           </div>
-          {previewContent === null && <p className="text-xs text-foreground-muted">Loading…</p>}
-          {previewContent && "content" in previewContent && (
+          {isImagePath(previewPath) ? (
+            <AuthImage roomId={roomId} path={previewPath} className="max-h-96 rounded-lg" />
+          ) : (
+            previewContent === null && <p className="text-xs text-foreground-muted">Loading…</p>
+          )}
+          {previewContent && "content" in previewContent && !isImagePath(previewPath) && (
             <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs">
               {previewContent.content}
             </pre>
           )}
-          {previewContent && "binary" in previewContent && (
+          {previewContent && "binary" in previewContent && !isImagePath(previewPath) && (
             <p className="text-xs text-foreground-muted">Binary file — download to view.</p>
           )}
           {previewContent && "tooLarge" in previewContent && (

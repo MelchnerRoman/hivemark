@@ -27,16 +27,21 @@ export async function runCodexTurn(
   agent: Agent,
   system: string,
   history: HistoryMessage[],
-  roomId: string | null
+  roomId: string | null,
+  signal: AbortSignal
 ): Promise<string> {
   const bashAccess = hasBashAccess(agent);
   const workspaceDir = bashAccess ? (roomId ? getRoomProjectDir(roomId) : getAgentWorkspaceDir(agent.id)) : undefined;
   const child = spawn("npx", ["-y", "@agentclientprotocol/codex-acp"], {
     stdio: ["pipe", "pipe", "pipe"],
+    signal,
   });
 
   let stderr = "";
   child.stderr.on("data", (chunk) => (stderr += chunk));
+  // Spawn failure (ENOENT) or abort — unhandled, either would crash the whole
+  // server; the closed stdout then fails the pending ACP request below.
+  child.on("error", (err) => (stderr += String(err)));
 
   const textChunks: string[] = [];
 

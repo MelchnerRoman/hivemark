@@ -4,7 +4,7 @@ import { FormEvent, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { useStore } from "@/lib/store";
-import { AGENT_COLOR_OPTIONS, AGENT_EMOJI_OPTIONS } from "@/lib/agent-constants";
+import { AGENT_COLOR_OPTIONS, AGENT_EMOJI_OPTIONS, AGENT_ROLE_PRESETS } from "@/lib/agent-constants";
 import { RuntimeSelect } from "@/components/agents/RuntimeSelect";
 import { ModelInput } from "@/components/agents/ModelInput";
 
@@ -39,7 +39,9 @@ function CreateAgentForm({
   const agentDefaults = useStore((s) => s.agentDefaults);
   const taskRooms = useStore((s) => s.taskRooms);
   const rooms = useStore((s) => s.rooms);
+  const mcpTools = useStore((s) => s.mcpTools);
   const [name, setName] = useState("");
+  const [toolIds, setToolIds] = useState<string[]>([]);
   const [instructions, setInstructions] = useState(agentDefaults.instructions);
   const [color, setColor] = useState(AGENT_COLOR_OPTIONS[0]);
   const [emoji, setEmoji] = useState(AGENT_EMOJI_OPTIONS[0]);
@@ -58,10 +60,17 @@ function CreateAgentForm({
     else if (switchingAwayFromOpenRouter) setModel(agentDefaults.model);
   }
 
+  function applyPreset(preset: (typeof AGENT_ROLE_PRESETS)[number]) {
+    setName(preset.label);
+    setEmoji(preset.emoji);
+    setInstructions(preset.instructions);
+    setToolIds(preset.toolIds.filter((id) => mcpTools.some((t) => t.id === id)));
+  }
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
-    createAgent(taskRoomId, name.trim(), instructions.trim(), color, emoji, model, runtimeId);
+    createAgent(taskRoomId, name.trim(), instructions.trim(), color, emoji, model, runtimeId, toolIds);
     onClose();
   }
 
@@ -91,6 +100,23 @@ function CreateAgentForm({
         </div>
       )}
       <div>
+        <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Start from a role</label>
+        <div className="flex flex-wrap gap-1.5">
+          {AGENT_ROLE_PRESETS.map((preset) => (
+            <button
+              type="button"
+              key={preset.label}
+              onClick={() => applyPreset(preset)}
+              className={`rounded-full border px-3 py-1 text-xs ${
+                name === preset.label ? "border-brand bg-brand-soft text-brand" : "border-border hover:bg-surface-raised"
+              }`}
+            >
+              {preset.emoji} {preset.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
         <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Agent name</label>
         <input
           autoFocus
@@ -106,7 +132,7 @@ function CreateAgentForm({
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
           placeholder="What should this agent do within this task room?"
-          rows={3}
+          rows={5}
           className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
         />
       </div>
@@ -145,7 +171,10 @@ function CreateAgentForm({
         </div>
       </div>
       <p className="text-xs text-foreground-muted">
-        You can grant MCP tool access to this agent after it&apos;s created.
+        {toolIds.length > 0
+          ? `Tools granted on creation: ${toolIds.map((id) => mcpTools.find((t) => t.id === id)?.name ?? id).join(", ")}. `
+          : ""}
+        You can change tool access after it&apos;s created.
       </p>
       <div className="flex justify-end gap-2 pt-1">
         <Button type="button" variant="ghost" onClick={onClose}>

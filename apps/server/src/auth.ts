@@ -38,7 +38,10 @@ function prune<K, V extends { createdAt: number } | number>(map: Map<K, V>, ttlM
   }
 }
 
-export function buildAuthorizeUrl(provider: ProviderName): string {
+/** Also returns the state, so the login route can bind it to this browser
+ * with a cookie (see index.ts) — server-side state alone doesn't stop login
+ * CSRF, where a victim is sent an attacker's callback URL. */
+export function buildAuthorizeUrl(provider: ProviderName): { url: string; state: string } {
   const config = OAUTH_PROVIDERS[provider];
   if (!config) throw new Error(`${provider} is not configured`);
 
@@ -54,7 +57,7 @@ export function buildAuthorizeUrl(provider: ProviderName): string {
     response_type: "code",
   });
   if (provider === "google") params.set("access_type", "online");
-  return `${config.authUrl}?${params.toString()}`;
+  return { url: `${config.authUrl}?${params.toString()}`, state };
 }
 
 export function verifyState(state: string | undefined): boolean {
@@ -87,6 +90,9 @@ async function exchangeGoogleCode(code: string): Promise<OAuthProfile> {
   });
   const profile = (await profileRes.json()) as any;
   if (!profileRes.ok) throw new Error("Failed to fetch Google profile");
+  // A Google account can carry an unverified address on any domain — it must
+  // not pass ALLOWED_EMAILS/ALLOWED_EMAIL_DOMAINS (GitHub path checks the same).
+  if (profile.email_verified !== true) throw new Error("Your Google account's email isn't verified.");
 
   return {
     providerUserId: profile.sub,

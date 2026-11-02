@@ -1,7 +1,7 @@
 const { app } = require("electron");
 const path = require("path");
 const http = require("http");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 
 const BACKEND_PORT = process.env.HIVEMARK_BACKEND_PORT || 4001;
 const HEALTH_URL = `http://localhost:${BACKEND_PORT}/api/health`;
@@ -17,6 +17,24 @@ const SERVER_DIR = app.isPackaged
   : path.join(__dirname, "..", "..", "server");
 
 let child = null;
+
+// A packaged app launched from Finder/Dock (or a desktop launcher) gets the
+// bare system PATH (/usr/bin:/bin:/usr/sbin:/sbin), so the backend's spawns
+// of `claude`, `goose` and `npx` (Homebrew, nvm, ~/.local/bin...) fail with
+// ENOENT. Ask the user's login shell for its PATH instead.
+function userShellPath() {
+  if (!app.isPackaged || process.platform === "win32") return process.env.PATH;
+  try {
+    const out = execFileSync(process.env.SHELL || "/bin/sh", ["-ilc", 'echo "__HIVEMARK_PATH__=$PATH"'], {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.match(/__HIVEMARK_PATH__=(.*)/)?.[1] || process.env.PATH;
+  } catch {
+    return process.env.PATH;
+  }
+}
 
 function waitForHealth(timeoutMs) {
   const start = Date.now();
@@ -44,7 +62,14 @@ async function startBackend() {
   if (app.isPackaged) {
     child = spawn(process.execPath, [path.join(SERVER_DIR, "dist", "index.js")], {
       cwd: SERVER_DIR,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", PORT: String(BACKEND_PORT) },
+      env: {
+        ...process.env,
+        PATH: userShellPath(),
+        ELECTRON_RUN_AS_NODE: "1",
+        PORT: String(BACKEND_PORT),
+        // Keep the DB/files out of the app bundle (replaced on every update).
+        HIVEMARK_DATA_DIR: path.join(app.getPath("userData"), "data"),
+      },
       stdio: "inherit",
     });
   } else {
@@ -64,11 +89,17 @@ async function startBackend() {
   await waitForHealth(15000);
 }
 
+// Resolves once the backend has exited (or after a grace period), so callers
+// that relaunch the app don't race the old process for the port.
 function stopBackend() {
-  if (child) {
-    child.kill();
-    child = null;
-  }
+  if (!child) return Promise.resolve();
+  const exiting = child;
+  child = null;
+  return new Promise((resolve) => {
+    exiting.once("exit", resolve);
+    setTimeout(resolve, 5000);
+    exiting.kill();
+  });
 }
 
 module.exports = { startBackend, stopBackend };

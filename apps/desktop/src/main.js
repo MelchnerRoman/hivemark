@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("path");
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const { installApplicationMenu } = require("./menu");
 const { startBackend, stopBackend } = require("./backend");
@@ -13,7 +14,7 @@ let settingsWindow = null;
 
 function checkReachable(url, timeoutMs) {
   return new Promise((resolve) => {
-    const req = http.get(`${url}/api/health`, { timeout: timeoutMs }, (res) => {
+    const req = (url.startsWith("https:") ? https : http).get(`${url}/api/health`, { timeout: timeoutMs }, (res) => {
       res.resume();
       resolve(res.statusCode === 200);
     });
@@ -47,13 +48,35 @@ const MIME_TYPES = {
   ".woff2": "font/woff2",
 };
 
+// Fixed port so the renderer's origin (and with it localStorage: session
+// token, theme) is stable across launches; falls back to an OS-assigned port
+// if something else already holds it.
+const STATIC_PORT = 4011;
+let staticExportUrl = null;
+
 function serveStaticExport() {
-  return new Promise((resolve, reject) => {
+  // One server per app run — macOS "activate" re-creates the window, and a
+  // fresh server (new port, new origin) would drop localStorage each time.
+  staticExportUrl ??= new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
-      let urlPath = decodeURIComponent(req.url.split("?")[0]);
+      let urlPath;
+      try {
+        urlPath = decodeURIComponent(req.url.split("?")[0]);
+      } catch {
+        res.writeHead(400);
+        res.end("Bad request");
+        return;
+      }
       if (urlPath === "/") urlPath = "/index.html";
 
       let filePath = path.join(WEB_OUT_DIR, urlPath);
+      // Encoded slashes (/..%2f..%2fetc/passwd) survive the client's own
+      // dot-segment normalization and would let path.join escape WEB_OUT_DIR.
+      if (!filePath.startsWith(WEB_OUT_DIR + path.sep)) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
       if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
         filePath = `${filePath}.html`;
       }
@@ -73,12 +96,14 @@ function serveStaticExport() {
       });
     });
 
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      resolve(`http://127.0.0.1:${port}`);
+    server.on("listening", () => resolve(`http://127.0.0.1:${server.address().port}`));
+    server.on("error", (err) => {
+      if (err.code === "EADDRINUSE") server.listen(0, "127.0.0.1");
+      else reject(err);
     });
-    server.on("error", reject);
+    server.listen(STATIC_PORT, "127.0.0.1");
   });
+  return staticExportUrl;
 }
 
 async function createWindow(backendUrl) {
@@ -105,7 +130,13 @@ async function createWindow(backendUrl) {
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    // Only hand web URLs to the OS — file:, smb:, custom app protocols etc.
+    // can launch local programs.
+    let protocol = null;
+    try {
+      protocol = new URL(url).protocol;
+    } catch {}
+    if (protocol === "http:" || protocol === "https:") shell.openExternal(url);
     return { action: "deny" };
   });
 
@@ -152,23 +183,53 @@ function createSettingsWindow() {
 // mounted binary path can be gone by relaunch time) — untested here, no
 // Linux box available. If that's ever reported, fall back to a
 // dialog.showMessageBox telling the user to quit and reopen manually.
-function applyConfigAndRestart() {
+// app.exit() skips before-quit, so stop the local backend explicitly — and
+// wait for it, or the relaunched instance races it for the port.
+async function applyConfigAndRestart() {
+  await stopBackend();
   app.relaunch();
   app.exit();
 }
 
-ipcMain.handle("set-server-url", (_event, url) => {
+// preload exposes these to every window, including the main one, which can
+// end up on remote pages (OAuth providers, a configured server) — only the
+// local settings window may change where the app connects.
+function fromSettingsWindow(event) {
+  return settingsWindow !== null && event.sender === settingsWindow.webContents;
+}
+
+ipcMain.handle("set-server-url", (event, url) => {
+  if (!fromSettingsWindow(event)) return;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return;
   config.setServerUrl(url);
-  applyConfigAndRestart();
+  return applyConfigAndRestart();
 });
-ipcMain.handle("use-local-server", () => {
+ipcMain.handle("use-local-server", (event) => {
+  if (!fromSettingsWindow(event)) return;
   config.clearServerUrl();
-  applyConfigAndRestart();
+  return applyConfigAndRestart();
 });
 
 let resolvedBackendUrl = `http://localhost:${process.env.HIVEMARK_BACKEND_PORT || 4001}`;
 
+// A second instance would spawn its own backend, lose the port race to ours,
+// silently share it, and then kill it out from under us when it quits.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) app.quit();
+app.on("second-instance", () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+});
+
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return;
   installApplicationMenu(createSettingsWindow);
 
   const configuredUrl = config.getServerUrl();

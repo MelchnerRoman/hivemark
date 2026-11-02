@@ -130,9 +130,16 @@ export function connectSync(onSync: () => void): () => void {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
 
+  let reconnecting = false;
+
   function connect() {
     const token = getToken();
     socket = new WebSocket(token ? `${WS_URL}?token=${encodeURIComponent(token)}` : WS_URL);
+    // Pushes sent while we were disconnected are lost — resync once back.
+    socket.onopen = () => {
+      if (reconnecting) onSync();
+      reconnecting = false;
+    };
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -146,6 +153,7 @@ export function connectSync(onSync: () => void): () => void {
     };
     socket.onclose = () => {
       if (closed) return;
+      reconnecting = true;
       reconnectTimer = setTimeout(connect, 2000);
     };
   }
@@ -188,8 +196,11 @@ export function setTaskRoomStatus(taskRoomId: string, status: TaskRoomStatus): P
 }
 
 // --- messages / DMs ---
-export function sendMessage(taskRoomId: string, content: string): Promise<ChatMessage> {
-  return request(`/api/task-rooms/${taskRoomId}/messages`, { method: "POST", body: JSON.stringify({ content }) });
+export function sendMessage(taskRoomId: string, content: string, attachments: string[] = []): Promise<ChatMessage> {
+  return request(`/api/task-rooms/${taskRoomId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content, attachments }),
+  });
 }
 export function sendDirectMessage(agentId: string, content: string): Promise<DirectMessage> {
   return request(`/api/agents/${agentId}/dm`, { method: "POST", body: JSON.stringify({ content }) });
@@ -216,6 +227,7 @@ export function createAgent(params: {
   avatarEmoji: string;
   model: string;
   runtimeId: string;
+  toolIds?: string[];
 }): Promise<Agent> {
   return request("/api/agents", { method: "POST", body: JSON.stringify(params) });
 }
@@ -353,6 +365,29 @@ export function createRoomFile(roomId: string, targetPath: string, type: "file" 
     method: "POST",
     body: JSON.stringify({ path: targetPath, type }),
   });
+}
+/** Raw file body, always sent as octet-stream — the server's JSON body
+ * parser would otherwise swallow an uploaded .json file. */
+export function uploadRoomFile(roomId: string, targetPath: string, file: Blob): Promise<{ path: string }> {
+  return request(`/api/rooms/${roomId}/project/upload?path=${encodeURIComponent(targetPath)}`, {
+    method: "PUT",
+    body: file,
+    headers: { "Content-Type": "application/octet-stream" },
+  });
+}
+/** A project file's bytes via the authenticated, membership-checked route —
+ * for showing images inline (see AuthImage). */
+export async function fetchRoomFileBlob(roomId: string, filePath: string): Promise<Blob> {
+  const token = getToken();
+  const res = await fetch(
+    `${BACKEND_URL}/api/rooms/${roomId}/project/files/download?path=${encodeURIComponent(filePath)}`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+  );
+  if (!res.ok) throw new Error(`Couldn't load ${filePath}: ${res.status}`);
+  return res.blob();
+}
+export function isImagePath(filePath: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg)$/i.test(filePath);
 }
 export function deleteRoomFile(roomId: string, targetPath: string): Promise<void> {
   return request(`/api/rooms/${roomId}/project/files?path=${encodeURIComponent(targetPath)}`, { method: "DELETE" });

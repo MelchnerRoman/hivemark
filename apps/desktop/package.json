@@ -5,7 +5,7 @@
   "main": "src/main.js",
   "scripts": {
     "dev": "cross-env HIVEMARK_DEV=1 electron .",
-    "build:server": "npm run build --workspace=server && node scripts/bundleServerRuntime.mjs && electron-rebuild -f -w better-sqlite3 -m ./build/server-runtime",
+    "build:server": "npm run build --workspace=server && node scripts/bundleServerRuntime.mjs",
     "build:electron": "npm run build:server && electron-builder"
   },
   "devDependencies": {
@@ -19,6 +19,7 @@
     "appId": "com.hivemark.app",
     "productName": "Hivemark",
     "electronVersion": "33.4.11",
+    "afterPack": "scripts/afterPack.js",
     "files": [
       "src/**/*",
       "package.json"

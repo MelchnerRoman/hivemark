@@ -29,7 +29,9 @@ import type {
   WorkflowStep,
 } from "./types.js";
 
-const DATA_DIR = path.join(import.meta.dirname, "..", "data");
+// HIVEMARK_DATA_DIR: the packaged desktop app points this at the OS app-data
+// folder — next to dist/ would be inside the app bundle, wiped on every update.
+const DATA_DIR = process.env.HIVEMARK_DATA_DIR ?? path.join(import.meta.dirname, "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 export const db = new Database(path.join(DATA_DIR, "hivemark.db"));
 db.pragma("journal_mode = WAL");
@@ -208,7 +210,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_direct_messages_agent ON direct_messages(agent_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_direct_messages_created_at ON direct_messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_task_rooms_room ON task_rooms(room_id);
-CREATE INDEX IF NOT EXISTS idx_agents_room ON agents(room_id);
 CREATE INDEX IF NOT EXISTS idx_workflows_task_room ON workflows(task_room_id);
 CREATE INDEX IF NOT EXISTS idx_loops_task_room ON loops(task_room_id);
 CREATE INDEX IF NOT EXISTS idx_todos_task_room ON todos(task_room_id);
@@ -223,12 +224,18 @@ CREATE INDEX IF NOT EXISTS idx_sessions_member ON sessions(member_id);
   if (!agentCols.some((c) => c.name === "room_id")) {
     db.exec("ALTER TABLE agents ADD COLUMN room_id TEXT");
   }
+  // Not in the schema block above — on a pre-room_id DB it would fail there,
+  // before this ALTER ever ran, crashing every boot.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_agents_room ON agents(room_id)");
 }
 
 // Codex doesn't actually need a separate install step (it's fetched on demand via
 // npx) — correct any DB seeded before this was realized, where it was marked
 // "cli_needed" and required a click through a non-functional "Install" button.
 db.prepare("UPDATE agent_runtimes SET status = 'ready' WHERE id = 'runtime-codex' AND status = 'cli_needed'").run();
+// Make the subscription option discoverable — the old text didn't say it.
+const CLAUDE_CODE_DESC = "Runs on your Claude Pro/Max subscription (or the API key) of the Claude Code CLI signed in on this machine — no Hivemark API key needed.";
+db.prepare("UPDATE agent_runtimes SET description = ? WHERE id = 'runtime-claude-code'").run(CLAUDE_CODE_DESC);
 
 // Files / Preview MCP tools — added after mcp_tools could already be seeded,
 // so a fresh seedCatalog() run won't fire on existing DBs. UPDATE covers a
@@ -265,6 +272,27 @@ for (const table of ["messages", "direct_messages"]) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN edited_at TEXT`);
   }
 }
+
+// Team creator — added after agent_teams could already exist.
+{
+  const cols = db.prepare("PRAGMA table_info(agent_teams)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "created_by_id")) db.exec("ALTER TABLE agent_teams ADD COLUMN created_by_id TEXT");
+}
+
+// Chat attachments (files in the Room's project folder) — added after
+// messages could already exist.
+{
+  const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "attachments")) {
+    db.exec("ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'");
+  }
+}
+
+// Built-in (not MCP) capability — Anthropic's server-side web search/fetch,
+// see claudeAgent.ts. Lives in the same catalog so it's granted the same way.
+db.prepare("INSERT OR IGNORE INTO mcp_tools (id, name, description, icon) VALUES ('web-research', 'Web research', ?, 'globe')").run(
+  "Search the web and read pages (Hivemark Agent runtime)"
+);
 
 // Credential encryption — added after connections could already hold plaintext
 // values. Encrypts any row not already in our encrypted format in place.
@@ -343,7 +371,7 @@ function seedCatalog() {
     "INSERT INTO agent_runtimes (id, name, icon, status, description, install_hint, setup_url) VALUES (?,?,?,?,?,?,?)"
   );
   insertRuntime.run("runtime-hivemark", "Hivemark Agent", "🐝", "ready", "Runs natively inside Hivemark. No install needed.", null, null);
-  insertRuntime.run("runtime-claude-code", "Claude Code", "✳️", "ready", "Hivemark talks to Claude Code directly.", null, null);
+  insertRuntime.run("runtime-claude-code", "Claude Code", "✳️", "ready", CLAUDE_CODE_DESC, null, null);
   insertRuntime.run("runtime-codex", "Codex", "⌨️", "ready", "Hivemark talks to the Codex CLI through an ACP adapter, fetched on demand via npx — no separate install needed. Needs Codex/OpenAI credentials configured on this machine.", null, "https://github.com/agentclientprotocol");
   insertRuntime.run("runtime-goose", "Goose", "🦢", "cli_needed", "Hivemark talks to Goose through the Goose CLI.", null, "https://block.github.io/goose/");
   insertRuntime.run("runtime-openrouter", "OpenRouter", "🌐", "ready", "Calls any model OpenRouter hosts (not just Claude) — type the model slug directly, e.g. openai/gpt-4o.", null, "https://openrouter.ai/keys");
@@ -465,6 +493,13 @@ function seedDemoWorkspace() {
 seedCatalog();
 seedDemoWorkspace();
 
+// Member DMs written before author_id existed (and the demo seed's) were all
+// by the single pre-auth member — attribute them so the edit/delete
+// "own messages only" check in index.ts doesn't lock everyone out of them.
+db.prepare("UPDATE direct_messages SET author_id = ? WHERE author_type = 'member' AND author_id IS NULL").run(
+  CURRENT_MEMBER_ID
+);
+
 // ---------------------------------------------------------------------------
 // Row <-> domain-type mapping helpers
 // ---------------------------------------------------------------------------
@@ -535,6 +570,7 @@ function rowToMessage(r: any): ChatMessage {
     content: r.content,
     createdAt: r.created_at,
     mentionedAgentIds: parseArray(r.mentioned_agent_ids),
+    attachments: parseArray(r.attachments),
     editedAt: r.edited_at ?? null,
   };
 }
@@ -569,7 +605,13 @@ function rowToAgent(r: any): Agent {
 }
 
 function rowToTeam(r: any): AgentTeam {
-  return { id: r.id, name: r.name, mode: r.mode as AgentTeamMode, agentIds: parseArray(r.agent_ids) };
+  return {
+    id: r.id,
+    name: r.name,
+    mode: r.mode as AgentTeamMode,
+    agentIds: parseArray(r.agent_ids),
+    createdById: r.created_by_id ?? null,
+  };
 }
 
 function rowToRuntime(r: any): AgentRuntime {
@@ -755,8 +797,11 @@ export const repo = {
         .map((r) => ({ ...r, taskRoomIds: r.taskRoomIds.filter((id) => visibleTaskRoomIds.has(id)) })),
       taskRooms: full.taskRooms.filter((t) => visibleTaskRoomIds.has(t.id)),
       messages: full.messages.filter((m) => visibleTaskRoomIds.has(m.taskRoomId)),
-      // Agents are available workspace-wide (mentionable from any room), so left unscoped
-      // like mcpTools/agentRuntimes — no per-room filtering.
+      // Only agents this member can see (and so @mention or DM) — see canSeeAgent.
+      agents: full.agents.filter((a) => repo.canSeeAgent(callerId, a)),
+      directMessages: full.directMessages.filter((dm) =>
+        full.agents.some((a) => a.id === dm.agentId && repo.canSeeAgent(callerId, a))
+      ),
       workflows: full.workflows.filter((w) => visibleTaskRoomIds.has(w.taskRoomId)),
       loops: full.loops.filter((l) => visibleTaskRoomIds.has(l.taskRoomId)),
       todos: full.todos.filter((t) => visibleTaskRoomIds.has(t.taskRoomId)),
@@ -835,6 +880,15 @@ export const repo = {
     return room ? room.memberIds.includes(memberId) : false;
   },
 
+  /** Who an agent is "visible" to — and so who can @mention / DM it: the
+   * owner, members of its home task room, and (for an agent attached to a
+   * Room) that Room's members. Same rule scopes /api/state's agents. */
+  canSeeAgent(memberId: string, agent: Agent): boolean {
+    if (repo.getMemberRole(memberId) === "owner") return true;
+    if (repo.isTaskRoomMember(agent.taskRoomId, memberId)) return true;
+    return !!agent.roomId && repo.isRoomMember(agent.roomId, memberId);
+  },
+
   /** Room-level equivalent of isTaskRoomMember, for routes scoped to a
    * Room's shared project folder rather than one Task Room within it. */
   isRoomMember(roomId: string, memberId: string): boolean {
@@ -849,13 +903,23 @@ export const repo = {
     authorType: "member" | "agent",
     authorId: string,
     content: string,
-    mentionedAgentIds: string[] = []
+    mentionedAgentIds: string[] = [],
+    attachments: string[] = []
   ): ChatMessage {
     const messageId = id("msg");
     const createdAt = nowIso();
     db.prepare(
-      "INSERT INTO messages (id, task_room_id, author_type, author_id, content, created_at, mentioned_agent_ids) VALUES (?,?,?,?,?,?,?)"
-    ).run(messageId, taskRoomId, authorType, authorId, content, createdAt, JSON.stringify(mentionedAgentIds));
+      "INSERT INTO messages (id, task_room_id, author_type, author_id, content, created_at, mentioned_agent_ids, attachments) VALUES (?,?,?,?,?,?,?,?)"
+    ).run(
+      messageId,
+      taskRoomId,
+      authorType,
+      authorId,
+      content,
+      createdAt,
+      JSON.stringify(mentionedAgentIds),
+      JSON.stringify(attachments)
+    );
     return rowToMessage(db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId));
   },
 
@@ -918,6 +982,7 @@ export const repo = {
     model: string;
     runtimeId: string;
     createdById: string;
+    toolIds?: string[];
   }): Agent {
     const agentId = id("agent");
     db.prepare(
@@ -934,7 +999,9 @@ export const repo = {
       params.instructions,
       "idle",
       params.createdById,
-      "[]"
+      JSON.stringify(
+        (params.toolIds ?? []).map((toolId) => ({ toolId, grantedById: params.createdById, grantedAt: nowIso() }))
+      )
     );
     return rowToAgent(db.prepare("SELECT * FROM agents WHERE id = ?").get(agentId));
   },
@@ -952,15 +1019,8 @@ export const repo = {
     return r ? rowToAgent(r) : null;
   },
 
-  getAgentsForTaskRoom(_taskRoomId: string): Agent[] {
-    // Agents are available (mentionable) in every room, not just their home task room.
-    return repo.getAllAgents();
-  },
-
-  /** Every agent, unscoped — the same query getAgentsForTaskRoom already runs
-   * (agents are global, not per-room), pulled out so callers that just need
-   * "all agents" (e.g. stop-all) don't have to build the entire getState()
-   * payload (messages, DMs, connections, ...) just to reach `.agents`. */
+  /** Every agent, unscoped — agents are workspace-wide (mentionable from any
+   * room), so this is also the mention/handoff candidate list. */
   getAllAgents(): Agent[] {
     return (stmtAllAgents.all() as any[]).map(rowToAgent);
   },
@@ -1003,13 +1063,14 @@ export const repo = {
   },
 
   // --- agent teams ---
-  createAgentTeam(name: string, agentIds: string[], mode: AgentTeamMode): AgentTeam {
+  createAgentTeam(name: string, agentIds: string[], mode: AgentTeamMode, createdById: string): AgentTeam {
     const teamId = id("team");
-    db.prepare("INSERT INTO agent_teams (id, name, mode, agent_ids) VALUES (?,?,?,?)").run(
+    db.prepare("INSERT INTO agent_teams (id, name, mode, agent_ids, created_by_id) VALUES (?,?,?,?,?)").run(
       teamId,
       name,
       mode,
-      JSON.stringify(agentIds)
+      JSON.stringify(agentIds),
+      createdById
     );
     return rowToTeam(db.prepare("SELECT * FROM agent_teams WHERE id = ?").get(teamId));
   },
@@ -1040,6 +1101,7 @@ export const repo = {
           model: source.model,
           runtimeId: source.runtimeId,
           createdById: memberId,
+          toolIds: source.grants.map((g) => g.toolId),
         })
       );
     }
@@ -1146,6 +1208,10 @@ export const repo = {
       "INSERT INTO todos (id, task_room_id, text, done, assignee_id, due_date) VALUES (?,?,?,0,?,?)"
     ).run(todoId, taskRoomId, text, assigneeId, dueDate);
     return rowToTodo(db.prepare("SELECT * FROM todos WHERE id = ?").get(todoId));
+  },
+
+  getTodosForTaskRoom(taskRoomId: string): TodoItem[] {
+    return (db.prepare("SELECT * FROM todos WHERE task_room_id = ?").all(taskRoomId) as any[]).map(rowToTodo);
   },
 
   getTodo(todoId: string): TodoItem | null {

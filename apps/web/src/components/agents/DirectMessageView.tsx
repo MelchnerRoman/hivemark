@@ -80,7 +80,7 @@ export function DirectMessageView() {
                   <span className="text-sm font-medium">{m.authorType === "agent" ? agent.name : "You"}</span>
                   <span className="text-xs text-foreground-muted">{formatTime(m.createdAt)}</span>
                   {m.editedAt && <span className="text-xs text-foreground-muted">(edited)</span>}
-                  {!isEditing && (
+                  {!isEditing && !m.id.startsWith("tmp-") && (
                     <span className="ml-auto flex gap-2 opacity-0 transition-opacity group-hover:opacity-100">
                       {isOwn && (
                         <button
@@ -109,6 +109,7 @@ export function DirectMessageView() {
                       value={editDraft}
                       onChange={(e) => setEditDraft(e.target.value)}
                       onKeyDown={(e) => {
+                        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                         if (e.key === "Enter" && editDraft.trim()) {
                           editDirectMessage(m.id, editDraft.trim());
                           setEditingId(null);

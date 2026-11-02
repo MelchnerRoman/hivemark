@@ -12,7 +12,12 @@ import type { HistoryMessage } from "./claudeAgent.js";
  * time, same as every other runtime here, rather than relying on Goose's
  * own session persistence.
  */
-export function runGooseTurn(agent: Agent, system: string, history: HistoryMessage[]): Promise<string> {
+export function runGooseTurn(
+  agent: Agent,
+  system: string,
+  history: HistoryMessage[],
+  signal: AbortSignal
+): Promise<string> {
   const apiKey = repo.getConnectionValue("anthropic");
   if (!apiKey) {
     return Promise.reject(
@@ -37,14 +42,17 @@ export function runGooseTurn(agent: Agent, system: string, history: HistoryMessa
         resolveModelId(agent.model),
         "--system",
         system,
-        "-t",
-        prompt,
+        // Prompt over stdin, not argv (OS argument-size limit, see claudeCodeAgent.ts).
+        "-i",
+        "-",
         "--output-format",
         "text",
         "--quiet",
       ],
-      { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ANTHROPIC_API_KEY: apiKey } }
+      { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ANTHROPIC_API_KEY: apiKey }, signal }
     );
+    child.stdin.on("error", () => {}); // EPIPE if goose dies early — surfaced via 'close'/'error' below
+    child.stdin.end(prompt);
 
     let stdout = "";
     let stderr = "";

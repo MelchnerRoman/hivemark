@@ -27,6 +27,8 @@ export function AgentsGalleryView() {
   const stopAllAgents = useStore((s) => s.stopAllAgents);
   const removeAgent = useStore((s) => s.removeAgent);
   const removeAgentTeam = useStore((s) => s.removeAgentTeam);
+  const currentMemberId = useStore((s) => s.currentMemberId);
+  const isOwner = useStore((s) => s.members.find((m) => m.id === s.currentMemberId)?.role === "owner");
   const goToAgentInContext = useStore((s) => s.goToAgentInContext);
   const [defaultsOpen, setDefaultsOpen] = useState(false);
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
@@ -225,15 +227,17 @@ export function AgentsGalleryView() {
                     >
                       Add to a Task Room
                     </button>
-                    <button
-                      onClick={() => {
-                        removeAgentTeam(team.id);
-                        setTeamMenuOpenId(null);
-                      }}
-                      className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-danger hover:bg-danger-soft"
-                    >
-                      Delete team
-                    </button>
+                    {(team.createdById === currentMemberId || isOwner) && (
+                      <button
+                        onClick={() => {
+                          removeAgentTeam(team.id);
+                          setTeamMenuOpenId(null);
+                        }}
+                        className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-danger hover:bg-danger-soft"
+                      >
+                        Delete team
+                      </button>
+                    )}
                   </div>
                 )}
 

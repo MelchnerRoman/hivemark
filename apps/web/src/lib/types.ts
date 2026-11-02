@@ -68,6 +68,9 @@ export type AgentTeam = {
   name: string;
   mode: AgentTeamMode;
   agentIds: string[];
+  /** Who made it — they (and the workspace owner) can delete it. Null for
+   * teams created before this was recorded: owner only. */
+  createdById: string | null;
 };
 
 export type AppView = "rooms" | "agents" | "dm";
@@ -80,6 +83,8 @@ export type ChatMessage = {
   content: string;
   createdAt: string;
   mentionedAgentIds?: string[];
+  /** Paths inside the Room's shared project folder (see agentSandbox.ts). */
+  attachments: string[];
   editedAt: string | null;
 };
 

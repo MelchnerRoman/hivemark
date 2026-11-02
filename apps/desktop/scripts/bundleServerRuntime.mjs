@@ -30,6 +30,8 @@ fs.writeFileSync(
 execFileSync("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], {
   cwd: stagingDir,
   stdio: "inherit",
+  // npm is npm.cmd on Windows, which execFile can only run through a shell.
+  shell: process.platform === "win32",
 });
 
 console.log(`Bundled server runtime deps into ${stagingDir}`);

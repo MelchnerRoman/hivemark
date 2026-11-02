@@ -57,9 +57,12 @@ async function tick() {
     }
     if (new Date(loop.nextRun) > now) continue;
 
-    const agents = repo.getAgentsForTaskRoom(loop.taskRoomId);
+    // The Task Room's own agents (created there) — not every agent in the
+    // workspace, even though any of them can be @mentioned from here.
+    const agents = repo.getAllAgents().filter((a) => a.taskRoomId === loop.taskRoomId);
+    const note = `[Scheduler]: The loop "${loop.name}" (${loop.schedule}) is due — do that task now.`;
     for (const agent of agents) {
-      runAgentTurn(agent.id, { kind: "task_room", taskRoomId: loop.taskRoomId }).catch((err) =>
+      runAgentTurn(agent.id, { kind: "task_room", taskRoomId: loop.taskRoomId, note }).catch((err) =>
         console.error("loop agent run failed", err)
       );
     }
@@ -79,7 +82,8 @@ async function tick() {
 }
 
 export function startScheduler() {
-  setInterval(() => void tick(), CHECK_INTERVAL_MS);
+  // A rejection here (e.g. a DB error) would be unhandled and kill the process.
+  setInterval(() => tick().catch((err) => console.error("[scheduler] tick failed", err)), CHECK_INTERVAL_MS);
 }
 
 // Self-check: `npx tsx src/scheduler.ts`

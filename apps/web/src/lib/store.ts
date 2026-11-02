@@ -27,6 +27,10 @@ function tempId(prefix: string) {
 }
 
 let hasHydratedOnce = false;
+// Several hydrates can be in flight at once (action + WS sync); a response that
+// arrives after a newer one was applied must not roll state back.
+let hydrateSeq = 0;
+let appliedHydrateSeq = 0;
 
 /** Structural equality for plain JSON data. Used so hydrate() can keep the
  * previous object/array reference for any slice whose content didn't
@@ -131,7 +135,7 @@ type Store = {
   addTeamToRoom: (roomId: string, teamId: string) => void;
   setTaskRoomStatus: (taskRoomId: string, status: TaskRoomStatus) => void;
 
-  sendMessage: (taskRoomId: string, content: string) => void;
+  sendMessage: (taskRoomId: string, content: string, attachments?: string[]) => void;
   sendDirectMessage: (agentId: string, content: string) => void;
   editMessage: (messageId: string, content: string) => void;
   deleteMessage: (messageId: string) => void;
@@ -145,7 +149,8 @@ type Store = {
     color: string,
     avatarEmoji: string,
     model: string,
-    runtimeId: string
+    runtimeId: string,
+    toolIds?: string[]
   ) => void;
   toggleAgentTool: (agentId: string, toolId: string) => void;
   updateAgentConfig: (agentId: string, model: string, runtimeId: string) => void;
@@ -196,7 +201,10 @@ export const useStore = create<Store>((set, get) => ({
   agentDefaults: DEFAULT_AGENT_DEFAULTS,
 
   hydrate: async () => {
+    const seq = ++hydrateSeq;
     const state = await api.fetchState();
+    if (seq < appliedHydrateSeq) return;
+    appliedHydrateSeq = seq;
     const before = get();
     notifyNewAgentMessages(
       { messages: before.messages, directMessages: before.directMessages },
@@ -328,18 +336,25 @@ export const useStore = create<Store>((set, get) => ({
     api.setTaskRoomStatus(taskRoomId, status).then(() => get().hydrate());
   },
 
-  sendMessage: (taskRoomId, content) => {
+  sendMessage: (taskRoomId, content, attachments = []) => {
     const optimistic: ChatMessage = {
       id: tempId("msg"),
       taskRoomId,
       authorType: "member",
       authorId: get().currentMemberId,
       content,
+      attachments,
       createdAt: new Date().toISOString(),
       editedAt: null,
     };
     set((s) => ({ messages: [...s.messages, optimistic] }));
-    api.sendMessage(taskRoomId, content).then(() => get().hydrate());
+    api
+      .sendMessage(taskRoomId, content, attachments)
+      .then(() => get().hydrate())
+      .catch((err) => {
+        set((s) => ({ messages: s.messages.filter((m) => m.id !== optimistic.id) }));
+        alert(err instanceof Error ? err.message : String(err));
+      });
   },
 
   sendDirectMessage: (agentId, content) => {
@@ -352,7 +367,13 @@ export const useStore = create<Store>((set, get) => ({
       editedAt: null,
     };
     set((s) => ({ directMessages: [...s.directMessages, optimistic] }));
-    api.sendDirectMessage(agentId, content).then(() => get().hydrate());
+    api
+      .sendDirectMessage(agentId, content)
+      .then(() => get().hydrate())
+      .catch((err) => {
+        set((s) => ({ directMessages: s.directMessages.filter((m) => m.id !== optimistic.id) }));
+        alert(err instanceof Error ? err.message : String(err));
+      });
   },
 
   editMessage: (messageId, content) => {
@@ -383,9 +404,9 @@ export const useStore = create<Store>((set, get) => ({
     api.deleteDirectMessage(dmId).then(() => get().hydrate()).catch((err) => alert(err instanceof Error ? err.message : String(err)));
   },
 
-  createAgent: (taskRoomId, name, instructions, color, avatarEmoji, model, runtimeId) => {
+  createAgent: (taskRoomId, name, instructions, color, avatarEmoji, model, runtimeId, toolIds) => {
     api
-      .createAgent({ taskRoomId, name, instructions, color, avatarEmoji, model, runtimeId })
+      .createAgent({ taskRoomId, name, instructions, color, avatarEmoji, model, runtimeId, toolIds })
       .then(() => get().hydrate());
   },
 

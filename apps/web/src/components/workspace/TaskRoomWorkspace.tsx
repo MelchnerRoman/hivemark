@@ -107,7 +107,9 @@ export function TaskRoomWorkspace() {
         ))}
       </nav>
 
-      <div className="min-h-0 flex-1">
+      {/* Keyed so per-panel local state (chat draft, pending attachments, todo
+          assignee…) doesn't leak into the next Task Room. */}
+      <div key={taskRoom.id} className="min-h-0 flex-1">
         {activeTab === "chat" && <ChatPane taskRoomId={taskRoom.id} />}
         {activeTab === "workflows" && <WorkflowsPanel taskRoomId={taskRoom.id} />}
         {activeTab === "loops" && <LoopsPanel taskRoomId={taskRoom.id} />}

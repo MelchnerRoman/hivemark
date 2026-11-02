@@ -7,11 +7,14 @@ Ships as both a web app and an Electron desktop app, sharing the same frontend.
 ## Features
 
 - **Rooms → Task Rooms** — a Room is a team/project (e.g. "Platform Team"); each Room holds several Task Rooms (e.g. "Rework onboarding flow"), which is where the actual chat, agents, and work items live.
-- **Agents** — created inside a Task Room, backed by a real Claude model, with an instructions prompt and a set of granted MCP tools. Reply when `@mentioned` in the Task Room chat, or 1:1 in a **Direct Message**.
+- **Agents** — workspace-wide "staff", backed by a real model, with an instructions prompt and a set of granted tools. Reply when `@mentioned` in any Task Room chat, or 1:1 in a **Direct Message**. Role presets (Project Manager, Researcher, UX/UI Designer, Developer, Copywriter) give a working agency team in a few clicks.
+- **Handoffs** — when an agent's reply `@mentions` a teammate, that teammate is triggered automatically (chains capped at 8 hops). Every agent sees the team roster, so a Project Manager agent can split a brief into todos and delegate.
+- **Files in, files out** — attach files to a chat message (button, paste, or drag & drop); they're stored in the Room's shared project folder. Agents on the Hivemark runtime see images and PDFs natively and read text/data files inline. Agents write deliverables into the same folder and attach them to their reply; images render inline in chat and in the Files panel.
+- **Built-in agent tools** (every Task Room turn, Hivemark + OpenRouter runtimes) — `attach_file`, `generate_image` (needs an OpenRouter key; model via `HIVEMARK_IMAGE_MODEL`, default `google/gemini-2.5-flash-image`), and todo management (`list_todos`, `add_todo`, `complete_todo`).
 - **Agent Teams** — group agents into a reusable team and clone the whole group into a new Task Room in one action.
 - **Agent Runtimes** (Settings → Agent runtimes) — which execution backend an agent uses. All five are real, not cosmetic — see "Agent Runtimes" below. Plus global agent defaults and behavior toggles.
 - **Connections** (Settings → Connections) — where you paste your own Anthropic and/or OpenRouter API key, and per-tool credentials (GitHub/Postgres/Slack/Linear); stored locally, never read from an environment variable.
-- **Workflows, Loops, Todos** — per-Task-Room. Workflows are a checklist with a draft/running/done status; Loops fire a recurring agent run on a schedule; Todos are a plain assignable list.
+- **Workflows, Loops, Todos** — per-Task-Room. Workflows are a checklist with a draft/running/done status; Loops fire a recurring run of the Task Room's own agents on a schedule, telling them which loop is due; Todos are an assignable list (humans or agents).
 
 ## Architecture
 
@@ -74,7 +77,7 @@ Set an agent's Runtime per-agent, or as the global default in Settings → Agent
 |---|---|---|---|
 | **Hivemark Agent** | Calls the Anthropic API directly (`@anthropic-ai/sdk`) | Hivemark's stored Anthropic key | Live, incl. tool calls |
 | **OpenRouter** | Calls OpenRouter's chat-completions API directly (plain `fetch`, `apps/server/src/openrouterAgent.ts`) | Hivemark's stored OpenRouter key | Live, incl. tool calls |
-| **Claude Code** | Spawns the real `claude -p` CLI (`apps/server/src/claudeCodeAgent.ts`) | Whatever's already logged in for the `claude` CLI on this machine | Live |
+| **Claude Code** | Spawns the real `claude -p` CLI (`apps/server/src/claudeCodeAgent.ts`) | Whatever's logged in for the `claude` CLI on this machine — a **Claude Pro/Max subscription** or an API key | Live, incl. reading attachments and writing files |
 | **Codex** | Spawns `npx @agentclientprotocol/codex-acp` and talks to it over the real Agent Client Protocol (`apps/server/src/codexAgent.ts`, using `@agentclientprotocol/sdk`) | Whatever's already configured for the Codex CLI (OPENAI_API_KEY/CODEX_API_KEY env var, or ChatGPT login) | Protocol verified live (handshake/session/prompt all real); no reply seen since no Codex credentials were available to test with |
 | **Goose** | Spawns the real `goose run --no-session` CLI (`apps/server/src/gooseAgent.ts`) | Hivemark's stored Anthropic key, passed as `ANTHROPIC_API_KEY` | Live |
 
@@ -82,19 +85,22 @@ For OpenRouter, an agent's Model field switches from the fixed Claude picker to 
 
 The Claude Code runtime card in Settings → Agent runtimes shows whether the `claude` CLI is signed in on this machine, with a **Sign in with Claude** button when it isn't. Clicking it runs the real `claude auth login` (opens the user's actual browser to Anthropic's OAuth consent page); the UI polls status every 2s until it detects a successful login. This is a real, supported flow (`claude auth login`/`claude auth status --json`, `apps/server/src/claudeCodeAuth.ts`) — not something reverse-engineered, since Anthropic doesn't offer a public "Sign in with Claude" OAuth flow for third-party apps generally.
 
-Claude Code and Codex are text-only for now — granting an MCP tool to an agent on one of those runtimes has no effect. Claude Code's own huge built-in toolset (Bash, Read, Write, Edit, ...) isn't exposed at all; Codex's tool-call permission requests are auto-denied (it can still reason and reply, just can't take actions on this machine) since there's no one to approve them in a headless server process. Wiring either up properly is a deliberate, separate, security-reviewed feature — not something to enable by accident.
+**Using a Claude subscription instead of API credits:** pick the Claude Code runtime (per agent, or as the default in Settings → Agent runtimes) and sign in there with your Pro/Max account. Hivemark's grants map onto Claude Code's own tools: in a Task Room it can always read the Room's project folder (so it sees attached images/PDFs), "Files" adds Write/Edit there, "Web research" adds WebSearch/WebFetch, and Bash still needs the server-wide opt-in. Not yet available on this runtime: the built-in `attach_file` / `generate_image` / todo tools and MCP tools (Browser, GitHub, ...). Subscriptions are personal: on a shared self-hosted server every Claude Code agent runs on the one login of the server machine, so teams should use API keys there.
+
+Codex is text-only for now — granting an MCP tool to an agent on that runtime has no effect; Codex's tool-call permission requests are auto-denied (it can still reason and reply, just can't take actions on this machine) since there's no one to approve them in a headless server process. Wiring that up properly is a deliberate, separate, security-reviewed feature — not something to enable by accident.
 
 ## MCP tools
 
 Agents can be granted tools from the MCP catalog:
 
+- **Web research** — Anthropic's server-side web search + web fetch (Hivemark Agent runtime only; billed per search by Anthropic).
 - **Browser** — spawns the real `@playwright/mcp` server, no credentials needed (but you need `npx playwright install chromium` once for it to actually control a browser).
 - **GitHub**, **Postgres** — spawn the real official MCP servers over stdio, gated on the matching Connections credential.
 - **Slack**, **Linear** — implemented as direct REST/GraphQL calls (not real spawned MCP servers) using the matching Connections credential.
 
 ## Loops
 
-A Loop fires recurring agent runs in its Task Room. The scheduler only understands two schedule formats: `"Every day at HH:MM"` and `"Every N minutes/hours/days"` — anything else typed into the schedule field just never fires (see the `ponytail:` comment in `apps/server/src/scheduler.ts` for the upgrade path if you need real cron expressions).
+A Loop fires recurring runs of the agents created in its Task Room. Schedules: `"Every day at HH:MM"`, `"Every <Weekday> at HH:MM"`, `"Every N minutes/hours/days"`, or a raw cron expression (e.g. `0 9 * * 1-5`). All times are UTC; an unparsable schedule never fires.
 
 ## Building for production
 
@@ -103,7 +109,7 @@ npm run build:web                              # static-exports apps/web to apps
 npm run build:desktop --workspace=desktop       # builds apps/server + packages the Electron app
 ```
 
-`build:desktop` also runs `electron-rebuild` to recompile `better-sqlite3`'s native binding against Electron's own Node ABI, and bundles `apps/server`'s compiled `dist/` + `node_modules` into the packaged app so it doesn't depend on the end user having Node installed.
+`build:desktop` bundles `apps/server`'s compiled `dist/` + `node_modules` into the packaged app (so it doesn't depend on the end user having Node installed), then an `afterPack` hook (`apps/desktop/scripts/afterPack.js`) rebuilds `better-sqlite3`'s native binding against Electron's own Node ABI *for each target architecture* — so the arm64 and x64 DMGs each get the right binary, whichever Mac builds them. The packaged app keeps its database in the OS app-data folder (`HIVEMARK_DATA_DIR`), not inside the app bundle. 
 
 ### A gotcha if you touch `apps/desktop/package.json`
 
@@ -113,6 +119,10 @@ electron-builder is also pinned to `^25.x`, not `^26.x` — `app-builder-lib@26`
 
 ## Known limitations
 
-- Loops only understand the two schedule formats above — no real cron parser.
+- Attachments are Task Room only (not DMs). File contents are sent to the model only for the 10 most recent messages and up to 20 MB in total (newest first); anything else is named, and agents can open it with their file tools. Very long rooms send only the most recent ~400k characters, with a note that older messages exist.
+- Claude Code / Codex / Goose runtimes don't get the built-in tools or native image input — they see attachment paths and can read them via their own file access.
+- DMs with an agent are shared by every member, not private per person.
+- The Room's project folder is served unauthenticated under `/preview-static/<roomId>/` so the live preview works in an iframe — except `uploads/` (chat attachments), which is members-only. SVGs served there can't run scripts.
+- @mentions (and agent handoffs) only reach agents the sender can see: agents created in a Task Room they're in, or attached to one of their Rooms. A Loop's handoffs stay within its Room.
 - Slack/Linear tools are simplified direct API calls, not real MCP servers.
 - No automated test suite — everything's been verified by hand (browser automation + curl) rather than a CI-run suite.

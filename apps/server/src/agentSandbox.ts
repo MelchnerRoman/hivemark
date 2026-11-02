@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Agent } from "./types.js";
 
-const DATA_DIR = path.join(import.meta.dirname, "..", "data");
+const DATA_DIR = process.env.HIVEMARK_DATA_DIR ?? path.join(import.meta.dirname, "..", "data"); // same as db.ts
 const WORKSPACES_DIR = path.join(DATA_DIR, "agent-workspaces");
 const ROOM_PROJECTS_DIR = path.join(DATA_DIR, "room-projects");
 
@@ -19,10 +19,18 @@ export function hasBashAccess(agent: Agent): boolean {
   return TOOL_ACCESS_ENABLED && agent.grants.some((g) => g.toolId === BASH_ACCESS_TOOL_ID);
 }
 
+/** Ids reach here straight from URL params (Express decodes %2F), so
+ * "..%2fsecret.key" would otherwise resolve into DATA_DIR itself. Every id
+ * the app mints (see db.ts id()) is plain `[\w-]+`. */
+function safeId(id: string): string {
+  if (!/^[\w-]+$/.test(id)) throw new Error("invalid id");
+  return id;
+}
+
 /** Per-agent, never-shared working directory for Bash/file tools to operate
  * in — created on first use. Never the app's own source/data root. */
 export function getAgentWorkspaceDir(agentId: string): string {
-  const dir = path.join(WORKSPACES_DIR, agentId);
+  const dir = path.join(WORKSPACES_DIR, safeId(agentId));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -31,7 +39,7 @@ export function getAgentWorkspaceDir(agentId: string): string {
  * the actual collaborative project (e.g. a website multiple agents build
  * together), as opposed to an agent's private scratch space above. */
 export function getRoomProjectDir(roomId: string): string {
-  const dir = path.join(ROOM_PROJECTS_DIR, roomId);
+  const dir = path.join(ROOM_PROJECTS_DIR, safeId(roomId));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

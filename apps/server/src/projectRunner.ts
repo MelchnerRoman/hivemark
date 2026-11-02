@@ -126,6 +126,9 @@ export function startPreview(roomId: string): PreviewState {
 
   const existing = previews.get(roomId);
   if (existing && (existing.status === "starting" || existing.status === "running")) return getPreviewState(roomId);
+  // An "error" run (start timeout, proxy failure) can still have a live
+  // process group — kill it before its state is replaced and lost for good.
+  if (existing) stopPreview(roomId);
 
   const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf-8"));
   const script = pkg.scripts?.dev ? "dev" : "start";

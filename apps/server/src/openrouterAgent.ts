@@ -1,10 +1,10 @@
 import { repo } from "./db.js";
-import { ToolSession } from "./mcp/manager.js";
+import type { ToolResult } from "./mcp/manager.js";
 import type { Agent } from "./types.js";
 import type { HistoryMessage } from "./claudeAgent.js";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MAX_TOOL_ITERATIONS = 6;
+const MAX_TOOL_ITERATIONS = 25;
 
 type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 type OpenRouterMessage = {
@@ -18,15 +18,16 @@ type OpenRouterMessage = {
  * Same job as runAgentTurn's Anthropic path, but calling OpenRouter's
  * OpenAI-compatible chat-completions endpoint directly via fetch (no SDK —
  * OpenRouter is plain REST) so an agent can run any model OpenRouter hosts,
- * not just Claude. Reuses the same ToolSession/MCP tool bridge, translated
- * to OpenAI's function-calling shape.
+ * not just Claude. Reuses the same tool bridge (MCP + built-in workspace
+ * tools), translated to OpenAI's function-calling shape.
  */
 export async function runOpenRouterTurn(
   agent: Agent,
   system: string,
   history: HistoryMessage[],
-  session: ToolSession,
-  tools: { name: string; description: string; input_schema: Record<string, unknown> }[]
+  callTool: (name: string, args: Record<string, unknown>) => Promise<ToolResult>,
+  tools: { name: string; description: string; input_schema: Record<string, unknown> }[],
+  signal: AbortSignal
 ): Promise<string> {
   const apiKey = repo.getConnectionValue("openrouter");
   if (!apiKey) {
@@ -42,12 +43,16 @@ export async function runOpenRouterTurn(
       }))
     : undefined;
 
-  const messages: OpenRouterMessage[] = [{ role: "system", content: system }, ...history];
+  const messages: OpenRouterMessage[] = [
+    { role: "system", content: system },
+    ...history.map(({ role, content }) => ({ role, content })),
+  ];
 
   let finalText = "";
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const res = await fetch(OPENROUTER_URL, {
       method: "POST",
+      signal,
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: agent.model,
@@ -77,7 +82,7 @@ export async function runOpenRouterTurn(
       } catch {
         // model sent malformed JSON args — proceed with empty args rather than fail the whole turn
       }
-      const result = await session.call(call.function.name, args);
+      const result = await callTool(call.function.name, args);
       messages.push({ role: "tool", tool_call_id: call.id, content: result.text });
     }
   }

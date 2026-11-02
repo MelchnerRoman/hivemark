@@ -11,6 +11,10 @@ export type AnthropicToolDef = {
   input_schema: Record<string, unknown>;
 };
 
+/** `images` carries image content (e.g. a browser screenshot) through to
+ * runtimes that can show it to the model, instead of dumping base64 as text. */
+export type ToolResult = { text: string; isError: boolean; images?: { data: string; mediaType: string }[] };
+
 /** One live connection session, potentially spanning many agent turns (see
  * the session cache below). Connects only the granted + actually-connected
  * tools, exposes their tools under a namespaced name (`<mcpToolId>__<originalName>`)
@@ -20,6 +24,8 @@ export class ToolSession {
   private clients = new Map<string, Client>();
   private toolOwner = new Map<string, string>(); // namespaced tool name -> mcp tool id
   private healthy = true;
+  /** Turns currently using this session — the idle sweep skips it while > 0. */
+  inUse = 0;
 
   get isHealthy() {
     return this.healthy;
@@ -40,6 +46,7 @@ export class ToolSession {
       // useless without a Room to preview (a DM turn has none).
       if (mcpToolId === "mcp-preview" && (!TOOL_ACCESS_ENABLED || !roomId)) continue;
 
+      let client: Client | undefined;
       try {
         const transport =
           config.kind === "http"
@@ -52,15 +59,18 @@ export class ToolSession {
                 env: { ...processEnvSubset(), ...(config.env ? config.env(credential) : {}) },
                 stderr: "ignore",
               });
-        const client = new Client({ name: "hivemark", version: "0.1.0" });
+        client = new Client({ name: "hivemark", version: "0.1.0" });
+        await client.connect(transport);
+        const { tools } = await client.listTools();
+        // Only once it's up — a tool that failed to connect is just left out
+        // (below), not a reason to mark the whole session unhealthy and
+        // respawn every server on every turn.
         client.onclose = () => {
           this.healthy = false;
         };
         client.onerror = () => {
           this.healthy = false;
         };
-        await client.connect(transport);
-        const { tools } = await client.listTools();
         this.clients.set(mcpToolId, client);
         for (const tool of tools) {
           const namespaced = `${mcpToolId}__${tool.name}`;
@@ -75,12 +85,14 @@ export class ToolSession {
         // A tool failing to connect (missing binary, bad creds, no network)
         // shouldn't take down the whole turn — just proceed without it.
         console.error(`[mcp] failed to connect ${mcpToolId}:`, err);
+        // Not in this.clients, so close() would never reach it — don't orphan its process.
+        client?.close().catch(() => {});
       }
     }
     return defs;
   }
 
-  async call(namespacedName: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
+  async call(namespacedName: string, args: Record<string, unknown>): Promise<ToolResult> {
     const mcpToolId = this.toolOwner.get(namespacedName);
     const originalName = namespacedName.includes("__")
       ? namespacedName.slice(namespacedName.indexOf("__") + 2)
@@ -92,10 +104,14 @@ export class ToolSession {
     try {
       const result = await client.callTool({ name: originalName, arguments: args });
       const content = Array.isArray(result.content) ? result.content : [];
+      const images = content
+        .filter((block: any) => block.type === "image")
+        .map((block: any) => ({ data: block.data as string, mediaType: block.mimeType as string }));
       const text = content
+        .filter((block: any) => block.type !== "image")
         .map((block: any) => (block.type === "text" ? block.text : JSON.stringify(block)))
         .join("\n");
-      return { text: text || "(no output)", isError: !!(result as any).isError };
+      return { text: text || (images.length ? "(image)" : "(no output)"), isError: !!(result as any).isError, images };
     } catch (err) {
       return { text: `Tool call failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
     }
@@ -188,7 +204,8 @@ export function startIdleSessionSweep() {
   setInterval(() => {
     const now = Date.now();
     for (const [agentId, cached] of sessionsByAgent) {
-      if (now - cached.lastUsedAt > SESSION_IDLE_TIMEOUT_MS) {
+      if (cached.session.inUse > 0) cached.lastUsedAt = now;
+      else if (now - cached.lastUsedAt > SESSION_IDLE_TIMEOUT_MS) {
         sessionsByAgent.delete(agentId);
         cached.session
           .close()

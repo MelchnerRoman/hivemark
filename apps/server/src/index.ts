@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { WebSocketServer, type VerifyClientCallbackSync } from "ws";
 import { repo } from "./db.js";
 import { bus } from "./events.js";
-import { runAgentTurn } from "./claudeAgent.js";
+import { findMentionedAgents, runAgentTurn, stopAgentTurn } from "./claudeAgent.js";
 import { startScheduler } from "./scheduler.js";
 import { getClaudeCodeAuthStatus, triggerClaudeCodeLogin } from "./claudeCodeAuth.js";
 import { isCliAvailable } from "./cliCheck.js";
@@ -22,7 +22,7 @@ import {
 } from "./agentSandbox.js";
 import { getPreviewState, startPreview, stopAllPreviews, stopPreview } from "./projectRunner.js";
 import { INTERNAL_TOKEN } from "./internalAuth.js";
-import { AUTH_ENABLED } from "./authConfig.js";
+import { AUTH_ENABLED, PUBLIC_URL } from "./authConfig.js";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -50,6 +50,19 @@ const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 const EXTRA_ORIGINS = (process.env.ALLOWED_ORIGIN ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 
 const app = express();
+// DNS rebinding: a page on attacker.example re-resolved to 127.0.0.1 is
+// same-origin with us, so its GETs carry no Origin header and sail past the
+// CORS check below — with auth disabled that's the owner's whole /api/state.
+// When bound to loopback, every real client addresses us as a loopback host.
+const LOCAL_HOST_HEADER = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+const EXTRA_HOSTS = EXTRA_ORIGINS.flatMap((o) => (URL.canParse(o) ? [new URL(o).host] : []));
+if (!AUTH_ENABLED && LOCAL_HOST_HEADER.test(HOST)) {
+  app.use((req, res, next) => {
+    const host = req.headers.host ?? "";
+    if (LOCAL_HOST_HEADER.test(host) || EXTRA_HOSTS.includes(host)) return next();
+    res.status(403).json({ error: "forbidden host" });
+  });
+}
 app.use(
   cors({
     origin(origin, callback) {
@@ -58,7 +71,9 @@ app.use(
     },
   })
 );
-app.use(express.json());
+// 2 MB: a pasted brief or document easily exceeds Express's 100 KB default,
+// which would reject the message outright.
+app.use(express.json({ limit: "2mb" }));
 
 function handle(fn: (req: express.Request<Record<string, string>>, res: express.Response) => unknown) {
   return async (req: express.Request<Record<string, string>>, res: express.Response) => {
@@ -92,15 +107,52 @@ function requireRoomMember(req: express.Request<Record<string, string>>, res: ex
   return false;
 }
 
+/** Workspace-wide settings (credentials, defaults, runtimes) — owner only. */
+function requireOwner(req: express.Request<Record<string, string>>, res: express.Response): boolean {
+  if (repo.getMemberRole(req.memberId) === "owner") return true;
+  res.status(403).json({ error: "Only the workspace owner can change this." });
+  return false;
+}
+
+/** Agent-scoped routes: 404s for an unknown agent, 403s for non-members of
+ * its task room. Returns the agent, or null after sending the response. */
+function requireAgentAccess(req: express.Request<Record<string, string>>, res: express.Response) {
+  const agent = repo.getAgent(req.params.agentId);
+  if (!agent) {
+    res.status(404).json({ error: "agent not found" });
+    return null;
+  }
+  return requireTaskRoomMember(req, res, agent.taskRoomId) ? agent : null;
+}
+
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 // --- auth (public — must stay registered before app.use(requireAuth) below) ---
 app.get("/api/auth/providers", (_req, res) => res.json({ providers: getEnabledProviders() }));
 
+// The state cookie must be set on the same host the provider redirects back
+// to (PUBLIC_URL), but the frontend may reach us under another name
+// (localhost vs 127.0.0.1, an internal URL, ...). So login always takes one
+// hop through PUBLIC_URL first — unconditionally, since comparing Host
+// headers would loop behind a proxy that rewrites them.
+const STATE_COOKIE = "hm_oauth_state";
+function readCookie(req: express.Request, name: string): string | null {
+  const match = (req.headers.cookie ?? "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return match ? match[1] : null;
+}
 app.get("/api/auth/:provider/login", (req, res) => {
   const provider = req.params.provider as ProviderName;
   if (!getEnabledProviders().includes(provider)) return res.status(404).json({ error: "provider not configured" });
-  res.redirect(buildAuthorizeUrl(provider));
+  if (req.query.hop !== "1") return res.redirect(`${PUBLIC_URL}/api/auth/${provider}/login?hop=1`);
+  const { url, state } = buildAuthorizeUrl(provider);
+  res.cookie(STATE_COOKIE, state, {
+    httpOnly: true,
+    sameSite: "lax", // sent on the provider's top-level redirect back to us
+    secure: PUBLIC_URL!.startsWith("https:"),
+    maxAge: 10 * 60_000,
+    path: "/",
+  });
+  res.redirect(url);
 });
 
 app.get(
@@ -109,7 +161,10 @@ app.get(
     const provider = req.params.provider as ProviderName;
     const frontendUrl = process.env.FRONTEND_URL!;
     if (!getEnabledProviders().includes(provider)) return res.status(404).json({ error: "provider not configured" });
-    if (!verifyState(req.query.state as string | undefined)) {
+    const state = req.query.state as string | undefined;
+    const cookieState = readCookie(req, STATE_COOKIE);
+    res.clearCookie(STATE_COOKIE, { path: "/" });
+    if (!state || cookieState !== state || !verifyState(state)) {
       return res.status(400).json({ error: "Login session expired or invalid — try signing in again." });
     }
     try {
@@ -136,8 +191,31 @@ app.post(
 // <iframe src> / new-tab navigation can't attach a bearer token. The content
 // served here is exactly what the Room's project is *for* (a site meant to
 // be viewed), so this mirrors what would be public once actually deployed.
+// Chat uploads (uploads/) also live in the project folder, so agents can read
+// them, but they aren't part of the site — members get them through the
+// authenticated download route instead. Checked on the real resolved path,
+// lowercased, so %-encoding, symlinks or "Uploads/" on a case-insensitive
+// disk can't slip past.
+const NO_SCRIPT_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:";
 app.use("/preview-static/:roomId", (req, res, next) => {
-  express.static(getRoomProjectDir(req.params.roomId))(req, res, next);
+  if (!repo.getRoom(req.params.roomId)) return res.sendStatus(404);
+  const dir = getRoomProjectDir(req.params.roomId);
+  let target: string;
+  try {
+    target = path.resolve(dir, "." + decodeURIComponent(req.path));
+  } catch {
+    return res.sendStatus(400);
+  }
+  const real = fs.existsSync(target) ? fs.realpathSync(target) : target;
+  const rel = path.relative(fs.realpathSync(dir), real).toLowerCase();
+  if (rel === "uploads" || rel.startsWith("uploads" + path.sep)) return res.sendStatus(404);
+  express.static(dir, {
+    // An SVG opened directly is a document that can run script on this
+    // origin; as an <img> it never runs script, so this only blocks the former.
+    setHeaders: (r, file) => {
+      if (file.toLowerCase().endsWith(".svg")) r.setHeader("Content-Security-Policy", NO_SCRIPT_CSP);
+    },
+  })(req, res, next);
 });
 
 // Called only by our own spawned "mcp-preview" MCP-server child processes
@@ -206,6 +284,7 @@ app.get(
 app.post(
   "/api/mcp-tools/:id/install",
   handle(async (req, res) => {
+    if (!requireOwner(req, res)) return;
     const setup = MCP_TOOL_SETUP[req.params.id];
     if (!setup) return res.status(400).json({ error: "This tool doesn't need installation." });
     await setup.install();
@@ -220,12 +299,14 @@ app.post(
 // without needing Express 5's wildcard route syntax.
 function listFilesRoute(dirFn: (req: express.Request<Record<string, string>>) => string) {
   return handle((req, res) => {
+    if (!requireAgentAccess(req, res)) return;
     const { entries, truncated } = listFilesRecursive(dirFn(req));
     res.json({ files: entries.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt)), truncated });
   });
 }
 function downloadFileRoute(dirFn: (req: express.Request<Record<string, string>>) => string) {
   return handle((req, res) => {
+    if (!requireAgentAccess(req, res)) return;
     const relativePath = String(req.query.path ?? "");
     const filePath = resolveFileInDir(dirFn(req), relativePath);
     if (!filePath) return res.status(404).json({ error: "file not found" });
@@ -317,6 +398,23 @@ app.patch(
   })
 );
 
+// Raw body (any file type) with the destination as ?path= — no multipart
+// parsing needed for one file per request.
+app.put(
+  "/api/rooms/:roomId/project/upload",
+  express.raw({ type: () => true, limit: "50mb" }),
+  handle((req, res) => {
+    if (!requireRoomMember(req, res, req.params.roomId)) return;
+    const relativePath = String(req.query.path ?? "");
+    const target = resolveWritePathInDir(getRoomProjectDir(req.params.roomId), relativePath);
+    if (!target || !Buffer.isBuffer(req.body)) return res.status(400).json({ error: "invalid upload" });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, req.body);
+    bus.emit("sync");
+    res.json({ path: relativePath });
+  })
+);
+
 // --- room preview (run the shared project as a real site) ---
 app.get(
   "/api/rooms/:roomId/preview/status",
@@ -359,6 +457,7 @@ app.post(
 app.post(
   "/api/rooms/:roomId/members",
   handle((req, res) => {
+    if (!requireRoomMember(req, res, req.params.roomId)) return;
     repo.addMemberToRoom(req.params.roomId, req.body.memberId);
     bus.emit("sync");
     res.json({ ok: true });
@@ -378,6 +477,7 @@ app.delete(
 app.post(
   "/api/rooms/:roomId/agents",
   handle((req, res) => {
+    if (!requireRoomMember(req, res, req.params.roomId)) return;
     repo.addAgentToRoom(req.body.agentId, req.params.roomId);
     bus.emit("sync");
     res.json({ ok: true });
@@ -386,6 +486,7 @@ app.post(
 app.delete(
   "/api/rooms/:roomId/agents/:agentId",
   handle((req, res) => {
+    if (!requireRoomMember(req, res, req.params.roomId)) return;
     repo.removeAgentFromRoom(req.params.agentId);
     bus.emit("sync");
     res.json({ ok: true });
@@ -394,6 +495,7 @@ app.delete(
 app.post(
   "/api/rooms/:roomId/agent-teams",
   handle((req, res) => {
+    if (!requireRoomMember(req, res, req.params.roomId)) return;
     const agents = repo.addTeamToRoom(req.body.teamId, req.params.roomId);
     bus.emit("sync");
     res.json(agents);
@@ -405,6 +507,7 @@ app.post(
   "/api/task-rooms",
   handle((req, res) => {
     const { roomId, name, emoji } = req.body;
+    if (!requireRoomMember(req, res, roomId)) return;
     const taskRoom = repo.createTaskRoom(roomId, name, emoji, req.memberId);
     bus.emit("sync");
     res.json(taskRoom);
@@ -426,22 +529,37 @@ app.post(
   handle((req, res) => {
     const taskRoomId = req.params.id;
     if (!requireTaskRoomMember(req, res, taskRoomId)) return;
-    const content: string = req.body.content;
-    const agents = repo.getAgentsForTaskRoom(taskRoomId);
-    const mentioned = agents.filter((a) => content.toLowerCase().includes(`@${a.name.toLowerCase()}`));
+    const content = String(req.body.content ?? "");
+    // Attachments are files already uploaded into the Room's project folder
+    // (see the upload route) — only accept paths that really are in there.
+    const taskRoom = repo.getTaskRoom(taskRoomId);
+    if (!taskRoom) return res.status(404).json({ error: "task room not found" });
+    if (req.body.attachments !== undefined && !Array.isArray(req.body.attachments)) {
+      return res.status(400).json({ error: "attachments must be an array" });
+    }
+    const projectDir = getRoomProjectDir(taskRoom.roomId);
+    const attachments = ((req.body.attachments ?? []) as unknown[]).map(String);
+    if (attachments.some((p) => !resolveFileInDir(projectDir, p))) {
+      return res.status(400).json({ error: "attachment not found in the project folder" });
+    }
+    if (!content.trim() && attachments.length === 0) return res.status(400).json({ error: "message is empty" });
+    // Only agents the sender can see — a mention can't wake an agent from a
+    // room they aren't in.
+    const mentioned = findMentionedAgents(content).filter((a) => repo.canSeeAgent(req.memberId, a));
 
     const message = repo.addMessage(
       taskRoomId,
       "member",
       req.memberId,
       content,
-      mentioned.map((a) => a.id)
+      mentioned.map((a) => a.id),
+      attachments
     );
     bus.emit("sync");
     res.json(message);
 
     for (const agent of mentioned) {
-      runAgentTurn(agent.id, { kind: "task_room", taskRoomId }).catch((err) =>
+      runAgentTurn(agent.id, { kind: "task_room", taskRoomId, originMemberId: req.memberId }).catch((err) =>
         console.error("agent turn failed", err)
       );
     }
@@ -452,6 +570,7 @@ app.patch(
   handle((req, res) => {
     const message = repo.getMessage(req.params.messageId);
     if (!message) return res.status(404).json({ error: "message not found" });
+    if (!requireTaskRoomMember(req, res, message.taskRoomId)) return;
     if (message.authorType !== "member" || message.authorId !== req.memberId) {
       return res.status(403).json({ error: "You can only edit your own messages." });
     }
@@ -465,6 +584,7 @@ app.delete(
   handle((req, res) => {
     const message = repo.getMessage(req.params.messageId);
     if (!message) return res.status(404).json({ error: "message not found" });
+    if (!requireTaskRoomMember(req, res, message.taskRoomId)) return;
     if (message.authorType === "member" && message.authorId !== req.memberId) {
       return res.status(403).json({ error: "You can only delete your own messages." });
     }
@@ -479,6 +599,9 @@ app.post(
   "/api/agents/:agentId/dm",
   handle((req, res) => {
     const agentId = req.params.agentId;
+    const agent = repo.getAgent(agentId);
+    // 404 (not 403) for an agent you can't see — same as it not existing for you.
+    if (!agent || !repo.canSeeAgent(req.memberId, agent)) return res.status(404).json({ error: "agent not found" });
     const message = repo.addDirectMessage(agentId, "member", req.body.content, req.memberId);
     bus.emit("sync");
     res.json(message);
@@ -490,7 +613,7 @@ app.patch(
   handle((req, res) => {
     const dm = repo.getDirectMessage(req.params.dmId);
     if (!dm) return res.status(404).json({ error: "message not found" });
-    if (dm.authorType !== "member") {
+    if (dm.authorType !== "member" || dm.authorId !== req.memberId) {
       return res.status(403).json({ error: "You can only edit your own messages." });
     }
     repo.updateDirectMessage(req.params.dmId, req.body.content);
@@ -503,6 +626,9 @@ app.delete(
   handle((req, res) => {
     const dm = repo.getDirectMessage(req.params.dmId);
     if (!dm) return res.status(404).json({ error: "message not found" });
+    if (dm.authorType === "member" && dm.authorId !== req.memberId) {
+      return res.status(403).json({ error: "You can only delete your own messages." });
+    }
     repo.deleteDirectMessage(req.params.dmId);
     bus.emit("sync");
     res.json({ ok: true });
@@ -522,9 +648,8 @@ app.post(
 app.patch(
   "/api/agents/:agentId/tools/:toolId",
   handle((req, res) => {
-    const agent = repo.getAgent(req.params.agentId);
-    if (!agent) return res.status(404).json({ error: "agent not found" });
-    if (!requireTaskRoomMember(req, res, agent.taskRoomId)) return;
+    const agent = requireAgentAccess(req, res);
+    if (!agent) return;
     repo.toggleAgentTool(req.params.agentId, req.params.toolId, req.memberId);
     bus.emit("sync");
     res.json({ ok: true });
@@ -533,9 +658,8 @@ app.patch(
 app.patch(
   "/api/agents/:agentId/config",
   handle((req, res) => {
-    const agent = repo.getAgent(req.params.agentId);
-    if (!agent) return res.status(404).json({ error: "agent not found" });
-    if (!requireTaskRoomMember(req, res, agent.taskRoomId)) return;
+    const agent = requireAgentAccess(req, res);
+    if (!agent) return;
     repo.updateAgentConfig(req.params.agentId, req.body);
     bus.emit("sync");
     res.json({ ok: true });
@@ -544,9 +668,9 @@ app.patch(
 app.delete(
   "/api/agents/:agentId",
   handle(async (req, res) => {
-    const agent = repo.getAgent(req.params.agentId);
-    if (!agent) return res.status(404).json({ error: "agent not found" });
-    if (!requireTaskRoomMember(req, res, agent.taskRoomId)) return;
+    const agent = requireAgentAccess(req, res);
+    if (!agent) return;
+    stopAgentTurn(agent.id);
     repo.removeAgent(req.params.agentId);
     await closeAgentSession(req.params.agentId);
     bus.emit("sync");
@@ -556,11 +680,10 @@ app.delete(
 app.post(
   "/api/agents/:agentId/run",
   handle((req, res) => {
-    const agent = repo.getAgent(req.params.agentId);
-    if (!agent) return res.status(404).json({ error: "agent not found" });
-    if (!requireTaskRoomMember(req, res, agent.taskRoomId)) return;
+    const agent = requireAgentAccess(req, res);
+    if (!agent) return;
     res.json({ ok: true });
-    runAgentTurn(agent.id, { kind: "task_room", taskRoomId: agent.taskRoomId }).catch((err) =>
+    runAgentTurn(agent.id, { kind: "task_room", taskRoomId: agent.taskRoomId, originMemberId: req.memberId }).catch((err) =>
       console.error("agent turn failed", err)
     );
   })
@@ -568,18 +691,20 @@ app.post(
 app.post(
   "/api/agents/:agentId/stop",
   handle((req, res) => {
-    const agent = repo.getAgent(req.params.agentId);
-    if (!agent) return res.status(404).json({ error: "agent not found" });
-    if (!requireTaskRoomMember(req, res, agent.taskRoomId)) return;
-    repo.setAgentStatus(req.params.agentId, "idle");
+    const agent = requireAgentAccess(req, res);
+    if (!agent) return;
+    stopAgentTurn(agent.id);
+    repo.setAgentStatus(agent.id, "idle");
     bus.emit("sync");
     res.json({ ok: true });
   })
 );
 app.post(
   "/api/agents/stop-all",
-  handle((_req, res) => {
-    for (const agent of repo.getAllAgents()) {
+  handle((req, res) => {
+    // Same scope as the single-agent stop route above.
+    for (const agent of repo.getAllAgents().filter((a) => repo.isTaskRoomMember(a.taskRoomId, req.memberId))) {
+      stopAgentTurn(agent.id);
       if (agent.status === "running") repo.setAgentStatus(agent.id, "idle");
     }
     bus.emit("sync");
@@ -592,7 +717,7 @@ app.post(
   "/api/agent-teams",
   handle((req, res) => {
     const { name, agentIds, mode } = req.body;
-    const team = repo.createAgentTeam(name, agentIds, mode);
+    const team = repo.createAgentTeam(name, agentIds, mode, req.memberId);
     bus.emit("sync");
     res.json(team);
   })
@@ -600,6 +725,11 @@ app.post(
 app.delete(
   "/api/agent-teams/:teamId",
   handle((req, res) => {
+    const team = repo.getAgentTeam(req.params.teamId);
+    if (!team) return res.status(404).json({ error: "team not found" });
+    if (team.createdById !== req.memberId && repo.getMemberRole(req.memberId) !== "owner") {
+      return res.status(403).json({ error: "Only the team's creator or the workspace owner can delete it." });
+    }
     repo.removeAgentTeam(req.params.teamId);
     bus.emit("sync");
     res.json({ ok: true });
@@ -608,6 +738,7 @@ app.delete(
 app.post(
   "/api/agent-teams/:teamId/add-to-room",
   handle((req, res) => {
+    if (!requireTaskRoomMember(req, res, req.body.taskRoomId)) return;
     const clones = repo.addTeamToTaskRoom(req.params.teamId, req.body.taskRoomId, req.memberId);
     bus.emit("sync");
     res.json(clones);
@@ -731,6 +862,7 @@ app.patch(
 app.put(
   "/api/agent-defaults",
   handle((req, res) => {
+    if (!requireOwner(req, res)) return;
     repo.setAgentDefaults(req.body);
     bus.emit("sync");
     res.json({ ok: true });
@@ -739,6 +871,7 @@ app.put(
 app.patch(
   "/api/agent-behavior-settings",
   handle((req, res) => {
+    if (!requireOwner(req, res)) return;
     const { key, value } = req.body;
     repo.setAgentBehaviorSetting(key, value);
     bus.emit("sync");
@@ -749,6 +882,7 @@ const RUNTIME_CLI_BINARY: Record<string, string> = { "runtime-goose": "goose" };
 app.post(
   "/api/agent-runtimes/:id/install",
   handle(async (req, res) => {
+    if (!requireOwner(req, res)) return;
     const binary = RUNTIME_CLI_BINARY[req.params.id];
     if (binary && !(await isCliAvailable(binary))) {
       return res
@@ -770,7 +904,8 @@ app.get(
 );
 app.post(
   "/api/runtimes/claude-code/login",
-  handle((_req, res) => {
+  handle((req, res) => {
+    if (!requireOwner(req, res)) return;
     triggerClaudeCodeLogin();
     res.json({ ok: true });
   })
@@ -781,6 +916,7 @@ const VALID_KEYS: ConnectionKey[] = ["anthropic", "openrouter", "github", "postg
 app.put(
   "/api/connections/:key",
   handle((req, res) => {
+    if (!requireOwner(req, res)) return;
     const key = req.params.key as ConnectionKey;
     if (!VALID_KEYS.includes(key)) return res.status(400).json({ error: "unknown connection key" });
     const value = String(req.body.value ?? "").trim();
@@ -799,6 +935,7 @@ app.put(
 app.delete(
   "/api/connections/:key",
   handle((req, res) => {
+    if (!requireOwner(req, res)) return;
     const key = req.params.key as ConnectionKey;
     if (!VALID_KEYS.includes(key)) return res.status(400).json({ error: "unknown connection key" });
     repo.removeConnection(key);

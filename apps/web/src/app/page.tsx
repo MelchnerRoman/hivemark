@@ -11,8 +11,13 @@ import { TaskRoomWorkspace } from "@/components/workspace/TaskRoomWorkspace";
 import { AgentsGalleryView } from "@/components/agents/AgentsGalleryView";
 import { DirectMessageView } from "@/components/agents/DirectMessageView";
 
+// Module-level so a re-run boot (StrictMode's double effect) waits for the
+// same one-time code exchange instead of racing ahead without a token.
+let authExchange: Promise<void> | undefined;
+
 export default function Home() {
   const view = useStore((s) => s.view);
+  const dmAgentId = useStore((s) => s.selectedDmAgentId);
   const hydrate = useStore((s) => s.hydrate);
   const loadMe = useStore((s) => s.loadMe);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +31,7 @@ export default function Home() {
     }
 
     let disconnect: (() => void) | null = null;
+    let cancelled = false;
 
     async function boot() {
       // Handoff from the OAuth callback redirect: a one-time code (never the
@@ -40,27 +46,38 @@ export default function Home() {
         window.history.replaceState({}, "", url.toString());
       }
       if (oauthError) setAuthError(oauthError);
-      if (code) {
-        const { token } = await exchangeAuthCode(code);
-        setToken(token);
-      }
+      if (code) authExchange = exchangeAuthCode(code).then(({ token }) => setToken(token));
+      await authExchange;
 
       try {
         await loadMe();
-      } catch {
+      } catch (err) {
+        // fetch() rejects with a TypeError when the server is unreachable —
+        // that's the "can't reach backend" screen, not a sign-in problem.
+        if (err instanceof TypeError) throw err;
         setNeedsLogin(true);
         return;
       }
 
       await hydrate();
+      // Unmounted mid-boot (e.g. StrictMode's double effect run) — don't open
+      // a socket nothing will ever close.
+      if (cancelled) return;
       setLoaded(true);
       disconnect = connectSync(() => {
-        hydrate().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+        // Clear on success so one failed resync doesn't brick the app for good.
+        hydrate().then(
+          () => setError(null),
+          (err) => setError(err instanceof Error ? err.message : String(err))
+        );
       });
     }
 
     boot().catch((err) => setError(err instanceof Error ? err.message : String(err)));
-    return () => disconnect?.();
+    return () => {
+      cancelled = true;
+      disconnect?.();
+    };
   }, [hydrate, loadMe]);
 
   if (needsLogin) {
@@ -90,7 +107,7 @@ export default function Home() {
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
       <RoomSidebar />
       {view === "agents" && <AgentsGalleryView />}
-      {view === "dm" && <DirectMessageView />}
+      {view === "dm" && <DirectMessageView key={dmAgentId} />}
       {view === "rooms" && (
         <>
           <TaskRoomList />
