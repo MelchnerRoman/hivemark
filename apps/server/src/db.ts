@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import { decryptSecret, encryptSecret, isEncrypted } from "./crypto.js";
 import { AUTH_ENABLED } from "./authConfig.js";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type {
   Agent,
   AgentBehaviorSettings,
@@ -326,6 +326,33 @@ db.prepare("INSERT OR IGNORE INTO mcp_tools (id, name, description, icon) VALUES
   // /api/state loads the caller's DMs (WHERE member_id = ? ORDER BY created_at).
   db.exec("CREATE INDEX IF NOT EXISTS idx_direct_messages_member ON direct_messages(member_id, created_at)");
 }
+
+// Incremental sync: every insert/update of a message or DM gets the next
+// value of one global counter (seq), every delete leaves a tombstone. Done
+// with triggers so no write path can forget it; /api/state?since=<seq> then
+// sends only what changed (see getScopedState).
+db.exec(`
+CREATE TABLE IF NOT EXISTS sync_seq (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL);
+INSERT OR IGNORE INTO sync_seq VALUES (1, 0);
+CREATE TABLE IF NOT EXISTS sync_deleted (seq INTEGER NOT NULL, tbl TEXT NOT NULL, id TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_sync_deleted_seq ON sync_deleted(seq);
+`);
+for (const tbl of ["messages", "direct_messages"]) {
+  const cols = db.prepare(`PRAGMA table_info(${tbl})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === "seq")) db.exec(`ALTER TABLE ${tbl} ADD COLUMN seq INTEGER`);
+  const bump = `UPDATE sync_seq SET value = value + 1; UPDATE ${tbl} SET seq = (SELECT value FROM sync_seq) WHERE rowid = NEW.rowid;`;
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_${tbl}_seq ON ${tbl}(seq);
+CREATE TRIGGER IF NOT EXISTS ${tbl}_seq_ins AFTER INSERT ON ${tbl} BEGIN ${bump} END;
+CREATE TRIGGER IF NOT EXISTS ${tbl}_seq_upd AFTER UPDATE ON ${tbl} WHEN NEW.seq IS OLD.seq BEGIN ${bump} END;
+CREATE TRIGGER IF NOT EXISTS ${tbl}_seq_del AFTER DELETE ON ${tbl} BEGIN
+  UPDATE sync_seq SET value = value + 1;
+  INSERT INTO sync_deleted VALUES ((SELECT value FROM sync_seq), '${tbl}', OLD.id);
+END;
+`);
+}
+// ponytail: tombstones are never pruned (a few bytes per deleted message);
+// prune ones older than the oldest connected client's seq if that ever matters.
 
 // Expired sessions are otherwise harmless (rejected at lookup) — a boot-time
 // sweep is enough, no need for a running timer.
@@ -755,17 +782,16 @@ const stmtDirectMessagesForAgent = db.prepare(
 const stmtAllAgents = db.prepare("SELECT * FROM agents");
 const stmtAllMembers = db.prepare("SELECT * FROM members");
 const stmtActiveLoops = db.prepare("SELECT * FROM loops WHERE active = 1");
+const stmtSyncSeq = db.prepare("SELECT value FROM sync_seq WHERE id = 1");
 
 // ---------------------------------------------------------------------------
 // Repository — the only interface routes/services should use to touch the DB
 // ---------------------------------------------------------------------------
 
 export const repo = {
-  /** Everything, except DMs: only `dmMemberId`'s own threads (DMs are
-   * private — loading every member's just to filter them out was wasted).
-   * withMessages=false skips the biggest table for a caller that loads only
-   * the task rooms it can see (getScopedState). */
-  getState(dmMemberId: string, withMessages = true): AppState {
+  /** Everything except messages and DMs — the big, private-per-caller part
+   * that getScopedState loads itself (scoped, and incrementally). */
+  getState(): AppState {
     return {
       members: (db.prepare("SELECT * FROM members").all() as any[]).map(rowToMember),
       mcpTools: (db.prepare("SELECT * FROM mcp_tools").all() as any[]).map(
@@ -776,12 +802,8 @@ export const repo = {
         return (db.prepare("SELECT * FROM rooms").all() as any[]).map((r) => rowToRoom(r, byRoom));
       })(),
       taskRooms: (db.prepare("SELECT * FROM task_rooms").all() as any[]).map(rowToTaskRoom),
-      messages: withMessages
-        ? (db.prepare("SELECT * FROM messages ORDER BY created_at ASC").all() as any[]).map(rowToMessage)
-        : [],
-      directMessages: (
-        db.prepare("SELECT * FROM direct_messages WHERE member_id = ? ORDER BY created_at ASC").all(dmMemberId) as any[]
-      ).map(rowToDm),
+      messages: [],
+      directMessages: [],
       agents: (db.prepare("SELECT * FROM agents").all() as any[]).map(rowToAgent),
       agentTeams: (db.prepare("SELECT * FROM agent_teams").all() as any[]).map(rowToTeam),
       agentRuntimes: (db.prepare("SELECT * FROM agent_runtimes").all() as any[]).map(rowToRuntime),
@@ -817,21 +839,56 @@ export const repo = {
    * Visibility is computed in memory from the rooms/task rooms loaded here —
    * the same rule as isTaskRoomMember/canSeeAgent, minus their per-agent and
    * per-DM queries (thousands per request for a non-owner). */
-  getScopedState(callerId: string): AppState {
-    if (repo.getMemberRole(callerId) === "owner") return repo.getState(callerId);
-    const full = repo.getState(callerId, false);
+  getScopedState(callerId: string, since?: { seq: number; scope: string }): AppState {
+    // Read first: anything written after this is re-sent next time (harmless).
+    const seq = (stmtSyncSeq.get() as { value: number }).value;
+    const full = repo.getState();
+    const isOwner = repo.getMemberRole(callerId) === "owner";
 
-    const visibleRoomIds = new Set(full.rooms.filter((r) => r.memberIds.includes(callerId)).map((r) => r.id));
+    const visibleRoomIds = new Set(full.rooms.filter((r) => isOwner || r.memberIds.includes(callerId)).map((r) => r.id));
     const visibleTaskRoomIds = new Set(
       full.taskRooms
-        .filter((t) => visibleRoomIds.has(t.roomId) && t.memberIds.includes(callerId))
+        .filter((t) => isOwner || (visibleRoomIds.has(t.roomId) && t.memberIds.includes(callerId)))
         .map((t) => t.id)
     );
     // Only agents this member can see (and so @mention or DM) — canSeeAgent's rule.
     const agents = full.agents.filter(
-      (a) => visibleTaskRoomIds.has(a.taskRoomId) || (!!a.roomId && visibleRoomIds.has(a.roomId))
+      (a) => isOwner || visibleTaskRoomIds.has(a.taskRoomId) || (!!a.roomId && visibleRoomIds.has(a.roomId))
     );
     const visibleAgentIds = new Set(agents.map((a) => a.id));
+
+    // A client may only build on its previous state if it was for the same
+    // member seeing the same things — otherwise a newly joined room's older
+    // messages would never arrive, and a left room's would linger.
+    const scope = isOwner
+      ? `owner:${callerId}`
+      : createHash("sha256")
+          .update(JSON.stringify([callerId, [...visibleTaskRoomIds].sort(), [...visibleAgentIds].sort()]))
+          .digest("base64url");
+    const delta = since && since.scope === scope ? since.seq : null;
+    const changed = delta === null ? "" : " AND seq > ?";
+    const deltaArgs = delta === null ? [] : [delta];
+
+    const messages = (
+      db
+        .prepare(
+          `SELECT * FROM messages WHERE ${isOwner ? "1" : "task_room_id IN (SELECT value FROM json_each(?))"}${changed} ORDER BY created_at ASC`
+        )
+        .all(...(isOwner ? [] : [JSON.stringify([...visibleTaskRoomIds])]), ...deltaArgs) as any[]
+    ).map(rowToMessage);
+    const directMessages = (
+      db
+        .prepare(`SELECT * FROM direct_messages WHERE member_id = ?${changed} ORDER BY created_at ASC`)
+        .all(callerId, ...deltaArgs) as any[]
+    )
+      .map(rowToDm)
+      .filter((dm) => visibleAgentIds.has(dm.agentId));
+    const deleted = { messages: [] as string[], directMessages: [] as string[] };
+    if (delta !== null) {
+      for (const d of db.prepare("SELECT tbl, id FROM sync_deleted WHERE seq > ?").all(delta) as { tbl: string; id: string }[]) {
+        (d.tbl === "messages" ? deleted.messages : deleted.directMessages).push(d.id);
+      }
+    }
 
     return {
       ...full,
@@ -839,18 +896,14 @@ export const repo = {
         .filter((r) => visibleRoomIds.has(r.id))
         .map((r) => ({ ...r, taskRoomIds: r.taskRoomIds.filter((id) => visibleTaskRoomIds.has(id)) })),
       taskRooms: full.taskRooms.filter((t) => visibleTaskRoomIds.has(t.id)),
-      messages: (
-        db
-          .prepare(
-            "SELECT * FROM messages WHERE task_room_id IN (SELECT value FROM json_each(?)) ORDER BY created_at ASC"
-          )
-          .all(JSON.stringify([...visibleTaskRoomIds])) as any[]
-      ).map(rowToMessage),
+      messages,
       agents,
-      directMessages: full.directMessages.filter((dm) => visibleAgentIds.has(dm.agentId)),
+      directMessages,
       workflows: full.workflows.filter((w) => visibleTaskRoomIds.has(w.taskRoomId)),
       loops: full.loops.filter((l) => visibleTaskRoomIds.has(l.taskRoomId)),
       todos: full.todos.filter((t) => visibleTaskRoomIds.has(t.taskRoomId)),
+      // delta: messages/directMessages hold only rows changed since `since`.
+      sync: { seq, scope, delta: delta !== null, deleted },
     };
   },
 

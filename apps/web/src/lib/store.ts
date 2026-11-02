@@ -59,6 +59,26 @@ export function keepIfSame<T>(prev: T, next: T): T {
   return (changed ? merged : prev) as T;
 }
 
+/** Where the last applied /api/state left off: the next fetch asks only for
+ * messages/DMs changed since then (the server falls back to a full state
+ * when the scope — who we are, what we can see — changed). */
+let syncCursor: { seq: number; scope: string } | null = null;
+
+/** Applies an incremental messages/DMs update; unchanged items keep their
+ * reference (so memoized rows don't re-render). */
+function applyDelta<T extends { id: string; createdAt: string }>(prev: T[], changed: T[], deletedIds: string[]): T[] {
+  if (!changed.length && !deletedIds.length) return prev;
+  const gone = new Set([...deletedIds, ...changed.map((m) => m.id)]);
+  return [...prev.filter((m) => !gone.has(m.id)), ...changed].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/** Swap an optimistic item for the server's saved one — unless the sync push
+ * already brought it in, which can beat the POST's own response. */
+function settle<T extends { id: string }>(list: T[], tempId: string, saved: T): T[] {
+  const rest = list.filter((m) => m.id !== tempId);
+  return rest.some((m) => m.id === saved.id) ? rest : [...rest, saved];
+}
+
 /** One shared, debounced refetch for both halves of a mutation: the action's
  * own HTTP response and the server's websocket "sync" push for that same
  * mutation land within a few ms of each other and used to fetch the full
@@ -241,13 +261,21 @@ export const useStore = create<Store>((set, get) => ({
   syncError: null,
   hydrate: async () => {
     const seq = ++hydrateSeq;
-    const state = await api.fetchState();
+    const state = await api.fetchState(syncCursor);
     if (seq < appliedHydrateSeq) return;
     appliedHydrateSeq = seq;
     const before = get();
+    const delta = state.sync?.delta ? state.sync.deleted : null;
+    const messages = delta
+      ? applyDelta(before.messages, state.messages, delta.messages)
+      : keepIfSame(before.messages, state.messages);
+    const directMessages = delta
+      ? applyDelta(before.directMessages, state.directMessages, delta.directMessages)
+      : keepIfSame(before.directMessages, state.directMessages);
+    syncCursor = state.sync ? { seq: state.sync.seq, scope: state.sync.scope } : null;
     notifyNewAgentMessages(
       { messages: before.messages, directMessages: before.directMessages },
-      { messages: state.messages, directMessages: state.directMessages, agents: state.agents }
+      { messages, directMessages, agents: state.agents }
     );
     hasHydratedOnce = true;
     set((s) => ({
@@ -255,8 +283,8 @@ export const useStore = create<Store>((set, get) => ({
       mcpTools: keepIfSame(s.mcpTools, state.mcpTools),
       rooms: keepIfSame(s.rooms, state.rooms),
       taskRooms: keepIfSame(s.taskRooms, state.taskRooms),
-      messages: keepIfSame(s.messages, state.messages),
-      directMessages: keepIfSame(s.directMessages, state.directMessages),
+      messages,
+      directMessages,
       agents: keepIfSame(s.agents, state.agents),
       agentTeams: keepIfSame(s.agentTeams, state.agentTeams),
       agentRuntimes: keepIfSame(s.agentRuntimes, state.agentRuntimes),
@@ -385,7 +413,10 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({ messages: [...s.messages, optimistic] }));
     api
       .sendMessage(taskRoomId, content, attachments)
-      .then(refresh, (err) => {
+      .then((saved) => {
+        set((s) => ({ messages: settle(s.messages, optimistic.id, saved) }));
+        refresh();
+      }, (err) => {
         set((s) => ({ messages: s.messages.filter((m) => m.id !== optimistic.id) }));
         alert(err instanceof Error ? err.message : String(err));
       });
@@ -404,7 +435,10 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({ directMessages: [...s.directMessages, optimistic] }));
     api
       .sendDirectMessage(agentId, content)
-      .then(refresh, (err) => {
+      .then((saved) => {
+        set((s) => ({ directMessages: settle(s.directMessages, optimistic.id, saved) }));
+        refresh();
+      }, (err) => {
         set((s) => ({ directMessages: s.directMessages.filter((m) => m.id !== optimistic.id) }));
         alert(err instanceof Error ? err.message : String(err));
       });

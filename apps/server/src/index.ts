@@ -298,7 +298,12 @@ app.delete(
 app.get(
   "/api/state",
   handle(async (req, res) => {
-    const state = repo.getScopedState(req.memberId);
+    // ?since=<seq>&scope=<scope> from the client's last state: only changed messages/DMs.
+    const since = Number(req.query.since);
+    const state = repo.getScopedState(
+      req.memberId,
+      Number.isInteger(since) && typeof req.query.scope === "string" ? { seq: since, scope: req.query.scope } : undefined
+    );
     const mcpTools = await Promise.all(
       state.mcpTools.map(async (tool) => {
         const setup = MCP_TOOL_SETUP[tool.id];

@@ -190,6 +190,44 @@ describe("auth enabled (multi-user)", () => {
     assert.equal((await s.req(`/api/direct-messages/${mine.id}`, { method: "PATCH", as: "own", body: JSON.stringify({ content: "x" }) })).status, 404);
   });
 
+  test("incremental /api/state: only changes, only visible rooms, full again when access changes", async () => {
+    const state = (as: string, cursor?: { seq: number; scope: string }) =>
+      s
+        .req(cursor ? `/api/state?since=${cursor.seq}&scope=${encodeURIComponent(cursor.scope)}` : "/api/state", { as })
+        .then((r) => r.json());
+    const post = (as: string, tr: string, content: string) =>
+      s.req(`/api/task-rooms/${tr}/messages`, { method: "POST", as, body: JSON.stringify({ content }) }).then((r) => r.json());
+
+    const first = await state("in");
+    assert.equal(first.sync.delta, false);
+    await post("own", "tr-a", "delta-visible");
+    await post("out", "tr-b", "delta-hidden");
+    const d1 = await state("in", first.sync);
+    assert.equal(d1.sync.delta, true);
+    assert.deepEqual(d1.messages.map((m: { content: string }) => m.content), ["delta-visible"], "only the new, visible message");
+
+    const msg = d1.messages[0];
+    await s.req(`/api/messages/${msg.id}`, { method: "PATCH", as: "own", body: JSON.stringify({ content: "delta-edited" }) });
+    const d2 = await state("in", d1.sync);
+    assert.deepEqual(d2.messages.map((m: { content: string }) => m.content), ["delta-edited"]);
+    await s.req(`/api/messages/${msg.id}`, { method: "DELETE", as: "own" });
+    const d3 = await state("in", d2.sync);
+    assert.deepEqual(d3.messages, []);
+    assert.deepEqual(d3.sync.deleted.messages, [msg.id]);
+
+    // m-out joins room A: their old cursor must not hide room A's older messages
+    const outBefore = await state("out");
+    await post("own", "tr-a", "older room-a message");
+    s.db.prepare("UPDATE rooms SET member_ids = '[\"m-owner\",\"m-in\",\"m-out\"]' WHERE id = 'room-a'").run();
+    s.db.prepare("UPDATE task_rooms SET member_ids = '[\"m-owner\",\"m-in\",\"m-out\"]' WHERE id = 'tr-a'").run();
+    const outAfter = await state("out", outBefore.sync);
+    assert.equal(outAfter.sync.delta, false, "scope changed -> full state");
+    assert.ok(outAfter.messages.some((m: { content: string }) => m.content === "older room-a message"));
+    // and a forged scope is just ignored (full state, still scoped)
+    const forged = await state("out", { seq: outAfter.sync.seq, scope: `owner:m-owner` });
+    assert.equal(forged.sync.delta, false);
+  });
+
   test("login CSRF: OAuth callback needs the state cookie of this browser", async () => {
     const hop = await fetch(`${s.url}/api/auth/google/login`, { redirect: "manual" });
     assert.match(hop.headers.get("location") ?? "", /\/api\/auth\/google\/login\?hop=1$/);

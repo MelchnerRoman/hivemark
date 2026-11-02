@@ -196,4 +196,6 @@ export type AppState = {
   loops: Loop[];
   todos: TodoItem[];
   connections: ConnectionStatus[];
+  /** Incremental sync bookkeeping — see repo.getScopedState. */
+  sync?: { seq: number; scope: string; delta: boolean; deleted: { messages: string[]; directMessages: string[] } };
 };

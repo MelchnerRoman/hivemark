@@ -64,6 +64,7 @@ export type BackendState = {
   loops: Loop[];
   todos: TodoItem[];
   connections: ConnectionStatus[];
+  sync?: { seq: number; scope: string; delta: boolean; deleted: { messages: string[]; directMessages: string[] } };
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -103,8 +104,10 @@ export function logout(): Promise<void> {
   return request("/api/auth/session", { method: "DELETE" });
 }
 
-export function fetchState(): Promise<BackendState> {
-  return request<BackendState>("/api/state");
+/** With `since` (the last state's sync cursor), messages/directMessages hold
+ * only what changed — see `sync.delta`. */
+export function fetchState(since?: { seq: number; scope: string } | null): Promise<BackendState> {
+  return request<BackendState>(since ? `/api/state?since=${since.seq}&scope=${encodeURIComponent(since.scope)}` : "/api/state");
 }
 
 /** The provider's current models (empty if the server can't ask it). */
