@@ -88,13 +88,14 @@ function ProjectFinder({ roomId }: { roomId: string }) {
 
   async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
     const files = [...(e.target.files ?? [])].filter(
-      // The upload route silently overwrites — ask before clobbering a file.
+      // The server refuses to overwrite unless told to — ask first.
       (file) => !entries?.some((x) => x.name === file.name) || window.confirm(`Replace existing "${file.name}"?`)
     );
     e.target.value = "";
     await run(
       (async () => {
-        for (const file of files) await uploadRoomFile(roomId, joinPath(currentDir, file.name), file);
+        // overwrite: only new names, or ones the user just confirmed replacing, remain.
+        for (const file of files) await uploadRoomFile(roomId, joinPath(currentDir, file.name), file, true);
       })()
     );
   }

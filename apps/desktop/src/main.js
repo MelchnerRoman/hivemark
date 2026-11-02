@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("path");
 const http = require("http");
 const https = require("https");
@@ -244,6 +244,7 @@ app.whenReady().then(async () => {
       await startBackend();
     } catch (err) {
       console.error("Failed to start Hivemark backend:", err);
+      dialog.showErrorBox("Hivemark backend problem", err instanceof Error ? err.message : String(err));
     }
   }
 

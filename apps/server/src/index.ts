@@ -408,6 +408,10 @@ app.put(
     const relativePath = String(req.query.path ?? "");
     const target = resolveWritePathInDir(getRoomProjectDir(req.params.roomId), relativePath);
     if (!target || !Buffer.isBuffer(req.body)) return res.status(400).json({ error: "invalid upload" });
+    // Never clobber a project file by accident — the client asks first.
+    if (fs.existsSync(target) && req.query.overwrite !== "1") {
+      return res.status(409).json({ error: `${relativePath} already exists` });
+    }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, req.body);
     bus.emit("sync");
@@ -478,7 +482,12 @@ app.post(
   "/api/rooms/:roomId/agents",
   handle((req, res) => {
     if (!requireRoomMember(req, res, req.params.roomId)) return;
-    repo.addAgentToRoom(req.body.agentId, req.params.roomId);
+    // Attaching makes the agent visible to every member of this Room (see
+    // canSeeAgent), so the caller must have access to the agent itself.
+    const agent = repo.getAgent(String(req.body.agentId ?? ""));
+    if (!agent) return res.status(404).json({ error: "agent not found" });
+    if (!requireTaskRoomMember(req, res, agent.taskRoomId)) return;
+    repo.addAgentToRoom(agent.id, req.params.roomId);
     bus.emit("sync");
     res.json({ ok: true });
   })
@@ -487,7 +496,9 @@ app.delete(
   "/api/rooms/:roomId/agents/:agentId",
   handle((req, res) => {
     if (!requireRoomMember(req, res, req.params.roomId)) return;
-    repo.removeAgentFromRoom(req.params.agentId);
+    const agent = repo.getAgent(req.params.agentId);
+    if (!agent || agent.roomId !== req.params.roomId) return res.status(404).json({ error: "agent not in this room" });
+    repo.removeAgentFromRoom(agent.id);
     bus.emit("sync");
     res.json({ ok: true });
   })
@@ -496,9 +507,15 @@ app.post(
   "/api/rooms/:roomId/agent-teams",
   handle((req, res) => {
     if (!requireRoomMember(req, res, req.params.roomId)) return;
-    const agents = repo.addTeamToRoom(req.body.teamId, req.params.roomId);
+    const team = repo.getAgentTeam(String(req.body.teamId ?? ""));
+    if (!team) return res.status(404).json({ error: "team not found" });
+    const agents = team.agentIds.map((id) => repo.getAgent(id)).filter((a) => a !== null);
+    if (agents.some((a) => !repo.isTaskRoomMember(a.taskRoomId, req.memberId))) {
+      return res.status(403).json({ error: "This team includes agents from task rooms you're not in." });
+    }
+    repo.addTeamToRoom(team.id, req.params.roomId);
     bus.emit("sync");
-    res.json(agents);
+    res.json(agents.map((a) => repo.getAgent(a.id)));
   })
 );
 

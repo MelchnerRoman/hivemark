@@ -368,8 +368,13 @@ export function createRoomFile(roomId: string, targetPath: string, type: "file" 
 }
 /** Raw file body, always sent as octet-stream — the server's JSON body
  * parser would otherwise swallow an uploaded .json file. */
-export function uploadRoomFile(roomId: string, targetPath: string, file: Blob): Promise<{ path: string }> {
-  return request(`/api/rooms/${roomId}/project/upload?path=${encodeURIComponent(targetPath)}`, {
+export function uploadRoomFile(
+  roomId: string,
+  targetPath: string,
+  file: Blob,
+  overwrite = false
+): Promise<{ path: string }> {
+  return request(`/api/rooms/${roomId}/project/upload?path=${encodeURIComponent(targetPath)}${overwrite ? "&overwrite=1" : ""}`, {
     method: "PUT",
     body: file,
     headers: { "Content-Type": "application/octet-stream" },

@@ -36,6 +36,17 @@ function userShellPath() {
   }
 }
 
+function isHealthy() {
+  return new Promise((resolve) => {
+    const req = http.get(HEALTH_URL, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.setTimeout(1000, () => req.destroy());
+    req.on("error", () => resolve(false));
+  });
+}
+
 function waitForHealth(timeoutMs) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
@@ -48,6 +59,12 @@ function waitForHealth(timeoutMs) {
       req.on("error", retry);
     };
     const retry = () => {
+      // Crashed during startup (bad DB, port taken, ...) — say so now, not
+      // after the full timeout. `child` is nulled by its exit handler.
+      if (!child) {
+        reject(new Error("The Hivemark backend exited while starting up. Check the app log for the cause."));
+        return;
+      }
       if (Date.now() - start > timeoutMs) {
         reject(new Error(`Hivemark backend didn't come up within ${timeoutMs}ms`));
         return;
@@ -59,6 +76,14 @@ function waitForHealth(timeoutMs) {
 }
 
 async function startBackend() {
+  // Something already answers on our port (typically `npm run dev`): ours
+  // would die with EADDRINUSE and the app would silently use that server and
+  // its data instead — surface it.
+  if (await isHealthy()) {
+    throw new Error(
+      `Another Hivemark server is already running on port ${BACKEND_PORT} (for example \`npm run dev\`), so the app is using that server and its data. Quit it and reopen Hivemark to use the app's own backend.`
+    );
+  }
   if (app.isPackaged) {
     child = spawn(process.execPath, [path.join(SERVER_DIR, "dist", "index.js")], {
       cwd: SERVER_DIR,
