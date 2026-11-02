@@ -97,3 +97,15 @@ test("the model list comes from the provider", async () => {
   const { models } = await (await s.req("/api/models?provider=anthropic")).json();
   assert.deepEqual(models, MOCK_MODELS.map((m) => m.display_name));
 });
+
+test("a single message over the history budget still reaches the agent (cut off)", async () => {
+  const before = mock.requests.length;
+  await s.req("/api/task-rooms/tr-onboarding/messages", {
+    method: "POST",
+    body: JSON.stringify({ content: `@Designer HUGE-BRIEF ${"x".repeat(450_000)}` }),
+  });
+  await waitFor(() => mock.requests.length > before);
+  const sent = JSON.stringify(mock.requests.at(-1).messages);
+  assert.match(sent, /HUGE-BRIEF/);
+  assert.match(sent, /message cut off here/);
+});

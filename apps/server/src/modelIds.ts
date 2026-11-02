@@ -14,7 +14,7 @@ export async function listAnthropicModels(): Promise<string[]> {
   if (!apiKey) return [];
   if (Date.now() - fetchedAt > 10 * 60_000) {
     const models: { id: string; name: string }[] = [];
-    for await (const m of new Anthropic({ apiKey }).models.list({ limit: 100 })) models.push({ id: m.id, name: m.display_name });
+    for await (const m of new Anthropic({ apiKey, timeout: 15_000, maxRetries: 1 }).models.list({ limit: 100 })) models.push({ id: m.id, name: m.display_name });
     anthropicModels = models;
     fetchedAt = Date.now();
   }
@@ -25,7 +25,7 @@ export async function listAnthropicModels(): Promise<string[]> {
 let openRouterModels: string[] = [];
 export async function listOpenRouterModels(): Promise<string[]> {
   if (!openRouterModels.length) {
-    const res = await fetch("https://openrouter.ai/api/v1/models");
+    const res = await fetch("https://openrouter.ai/api/v1/models", { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error(`OpenRouter models: ${res.status}`);
     openRouterModels = ((await res.json()) as { data: { id: string }[] }).data.map((m) => m.id).sort();
   }

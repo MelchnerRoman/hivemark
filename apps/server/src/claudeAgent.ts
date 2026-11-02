@@ -132,6 +132,12 @@ function buildHistoryMessages(agent: Agent, turn: Turn): HistoryMessage[] {
   while (keepFrom > 0 && chars + history[keepFrom - 1].content.length <= HISTORY_CHAR_BUDGET) {
     chars += history[--keepFrom].content.length;
   }
+  // The newest message alone is over budget: keep (the start of) it anyway,
+  // or the agent would never see the request it's answering.
+  if (keepFrom === history.length && keepFrom > 0) {
+    const last = history[--keepFrom];
+    history[keepFrom] = { ...last, content: `${last.content.slice(0, HISTORY_CHAR_BUDGET)}\n[Hivemark]: (message cut off here — too long to send)` };
+  }
   if (keepFrom > 0) {
     history.splice(0, keepFrom, {
       role: "user",
