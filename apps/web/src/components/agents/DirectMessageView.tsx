@@ -3,22 +3,23 @@
 import { FormEvent, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/lib/store";
-import { AGENT_STATUS_TONE, formatTime } from "@/lib/display";
+import { AGENT_STATUS_TONE } from "@/lib/display";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { MessageRow } from "@/components/workspace/MessageRow";
+import { useStickToBottom } from "@/lib/useStickToBottom";
 
 export function DirectMessageView() {
   const agentId = useStore((s) => s.selectedDmAgentId);
   const agent = useStore((s) => s.agents.find((a) => a.id === s.selectedDmAgentId));
   const messages = useStore(useShallow((s) => s.directMessages.filter((m) => m.agentId === agentId)));
-  const sendDirectMessage = useStore((s) => s.sendDirectMessage);
   const editDirectMessage = useStore((s) => s.editDirectMessage);
   const deleteDirectMessage = useStore((s) => s.deleteDirectMessage);
   const goToAgentInContext = useStore((s) => s.goToAgentInContext);
-  const [draft, setDraft] = useState("");
+  const me = useStore((s) => s.members.find((m) => m.id === s.currentMemberId));
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState("");
+  const { ref, onScroll } = useStickToBottom(messages, agentId ?? "");
 
   if (!agentId || !agent) {
     return (
@@ -28,12 +29,6 @@ export function DirectMessageView() {
     );
   }
 
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!draft.trim() || !agentId) return;
-    sendDirectMessage(agentId, draft.trim());
-    setDraft("");
-  }
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -55,79 +50,25 @@ export function DirectMessageView() {
         </div>
       </header>
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+      <div ref={ref} onScroll={onScroll} className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
         {messages.map((m) => {
-          const isOwn = m.authorType === "member";
-          const isEditing = editingId === m.id;
+          const isAgent = m.authorType === "agent";
+          // Optimistic (tmp-) messages don't exist server-side yet.
+          const isSaved = !m.id.startsWith("tmp-");
           return (
-            <div key={m.id} className="group flex gap-3">
-              <Avatar
-                label={m.authorType === "agent" ? agent.avatarEmoji : "RM"}
-                color={m.authorType === "agent" ? agent.color : "#5b5cff"}
-                size={30}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-medium">{m.authorType === "agent" ? agent.name : "You"}</span>
-                  <span className="text-xs text-foreground-muted">{formatTime(m.createdAt)}</span>
-                  {m.editedAt && <span className="text-xs text-foreground-muted">(edited)</span>}
-                  {!isEditing && !m.id.startsWith("tmp-") && (
-                    <span className="ml-auto flex gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-                      {isOwn && (
-                        <button
-                          onClick={() => {
-                            setEditingId(m.id);
-                            setEditDraft(m.content);
-                          }}
-                          className="text-xs text-foreground-muted hover:text-brand"
-                        >
-                          Edit
-                        </button>
-                      )}
-                      <button
-                        onClick={() => deleteDirectMessage(m.id)}
-                        className="text-xs text-foreground-muted hover:text-danger"
-                      >
-                        Delete
-                      </button>
-                    </span>
-                  )}
-                </div>
-                {isEditing ? (
-                  <div className="mt-1 flex gap-2">
-                    <input
-                      autoFocus
-                      value={editDraft}
-                      onChange={(e) => setEditDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                        if (e.key === "Enter" && editDraft.trim()) {
-                          editDirectMessage(m.id, editDraft.trim());
-                          setEditingId(null);
-                        } else if (e.key === "Escape") {
-                          setEditingId(null);
-                        }
-                      }}
-                      className="flex-1 rounded-lg border border-border bg-background px-2 py-1 text-sm outline-none focus:border-brand"
-                    />
-                    <button
-                      onClick={() => {
-                        if (editDraft.trim()) editDirectMessage(m.id, editDraft.trim());
-                        setEditingId(null);
-                      }}
-                      className="text-xs text-brand hover:underline"
-                    >
-                      Save
-                    </button>
-                    <button onClick={() => setEditingId(null)} className="text-xs text-foreground-muted hover:underline">
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <p className="text-sm leading-relaxed text-foreground">{m.content}</p>
-                )}
-              </div>
-            </div>
+            <MessageRow
+              key={m.id}
+              message={m}
+              name={isAgent ? agent.name : "You"}
+              initials={isAgent ? agent.avatarEmoji : (me?.initials ?? "?")}
+              color={isAgent ? agent.color : (me?.color ?? "#5b5cff")}
+              canEdit={!isAgent && isSaved}
+              canDelete={isSaved}
+              isEditing={editingId === m.id}
+              setEditingId={setEditingId}
+              onSave={editDirectMessage}
+              onDelete={deleteDirectMessage}
+            />
           );
         })}
         {messages.length === 0 && (
@@ -137,17 +78,35 @@ export function DirectMessageView() {
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="flex gap-2 border-t border-border p-4">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={`Message ${agent.name}…`}
-          className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
-        />
-        <Button type="submit" disabled={!draft.trim()}>
-          Send
-        </Button>
-      </form>
+      <DmComposer agentId={agent.id} agentName={agent.name} />
     </div>
+  );
+}
+
+/** Own component so typing doesn't re-render the conversation above it. */
+function DmComposer({ agentId, agentName }: { agentId: string; agentName: string }) {
+  const sendDirectMessage = useStore((s) => s.sendDirectMessage);
+  const [draft, setDraft] = useState("");
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!draft.trim()) return;
+    sendDirectMessage(agentId, draft.trim());
+    setDraft("");
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex gap-2 border-t border-border p-4">
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        aria-label={`Message ${agentName}`}
+        placeholder={`Message ${agentName}…`}
+        className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
+      />
+      <Button type="submit" disabled={!draft.trim()}>
+        Send
+      </Button>
+    </form>
   );
 }
