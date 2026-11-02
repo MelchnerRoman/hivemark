@@ -104,7 +104,7 @@ function CreateAgentTeamForm({ onClose }: { onClose: () => void }) {
       <p className="text-xs text-foreground-muted">
         Teams group existing agents so you can drop the whole squad into a Task Room together.
       </p>
-      <div className="flex justify-end gap-2 pt-1">
+      <div className="sticky bottom-0 flex justify-end gap-2 bg-surface py-1">
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>

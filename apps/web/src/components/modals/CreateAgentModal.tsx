@@ -176,7 +176,7 @@ function CreateAgentForm({
           : ""}
         You can change tool access after it&apos;s created.
       </p>
-      <div className="flex justify-end gap-2 pt-1">
+      <div className="sticky bottom-0 flex justify-end gap-2 bg-surface py-1">
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
         </Button>

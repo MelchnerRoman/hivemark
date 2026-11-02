@@ -195,7 +195,7 @@ export function RoomSettingsModal({
           )}
         </div>
 
-        <div className="flex justify-end pt-1">
+        <div className="sticky bottom-0 flex justify-end bg-surface py-1">
           <Button type="button" variant="ghost" onClick={onClose}>
             Close
           </Button>
