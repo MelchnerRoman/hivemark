@@ -1,5 +1,6 @@
 "use client";
 
+import { modelProvider } from "@/lib/agent-constants";
 import { FormEvent, useEffect, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
@@ -58,11 +59,9 @@ function AgentSettingsBody() {
   }
 
   function handleRuntimeChange(nextRuntimeId: string) {
-    const switchingToOpenRouter = nextRuntimeId === "runtime-openrouter" && runtimeId !== "runtime-openrouter";
-    const switchingAwayFromOpenRouter = runtimeId === "runtime-openrouter" && nextRuntimeId !== "runtime-openrouter";
     setRuntimeId(nextRuntimeId);
-    if (switchingToOpenRouter) setModel("");
-    else if (switchingAwayFromOpenRouter) setModel(agentDefaults.model);
+    // another provider's model list: "" lets ModelInput pick its default
+    if (modelProvider(nextRuntimeId) !== modelProvider(runtimeId)) setModel("");
   }
 
   return (

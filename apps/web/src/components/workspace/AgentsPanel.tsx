@@ -1,5 +1,6 @@
 "use client";
 
+import { modelProvider } from "@/lib/agent-constants";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/lib/store";
@@ -211,11 +212,9 @@ function AgentConfigEditor({ agent, onDone }: { agent: Agent; onDone: () => void
   const [model, setModel] = useState(agent.model);
 
   function handleRuntimeChange(nextRuntimeId: string) {
-    const switchingToOpenRouter = nextRuntimeId === "runtime-openrouter" && runtimeId !== "runtime-openrouter";
-    const switchingAwayFromOpenRouter = runtimeId === "runtime-openrouter" && nextRuntimeId !== "runtime-openrouter";
     setRuntimeId(nextRuntimeId);
-    if (switchingToOpenRouter) setModel("");
-    else if (switchingAwayFromOpenRouter) setModel("Claude Sonnet 5");
+    // another provider's model list: "" lets ModelInput pick its default
+    if (modelProvider(nextRuntimeId) !== modelProvider(runtimeId)) setModel("");
   }
 
   function handleSave() {

@@ -9,6 +9,7 @@ import { startScheduler } from "./scheduler.js";
 import { getClaudeCodeAuthStatus, triggerClaudeCodeLogin } from "./claudeCodeAuth.js";
 import { isCliAvailable } from "./cliCheck.js";
 import { listAnthropicModels, listOpenRouterModels } from "./modelIds.js";
+import { listCodexModels } from "./codexAgent.js";
 import { MCP_TOOL_SETUP } from "./mcp/setup.js";
 import { closeAgentSession, closeAllAgentSessions, startIdleSessionSweep } from "./mcp/manager.js";
 import {
@@ -951,7 +952,8 @@ app.get(
 app.get(
   "/api/models",
   handle(async (req, res) => {
-    res.json({ models: req.query.provider === "openrouter" ? await listOpenRouterModels() : await listAnthropicModels() });
+    const list = { openrouter: listOpenRouterModels, codex: listCodexModels }[String(req.query.provider)] ?? listAnthropicModels;
+    res.json({ models: await list() });
   })
 );
 app.post(

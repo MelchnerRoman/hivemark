@@ -7,6 +7,11 @@ export const AGENT_MODEL_OPTIONS = [
   "Claude Haiku 4.5",
 ] as const;
 
+/** Whose model list a runtime picks from (see ModelInput). */
+export function modelProvider(runtimeId: string): "anthropic" | "openrouter" | "codex" {
+  return runtimeId === "runtime-openrouter" ? "openrouter" : runtimeId === "runtime-codex" ? "codex" : "anthropic";
+}
+
 export const AGENT_EMOJI_OPTIONS = ["🤖", "🐝", "🦊", "👾", "🎯", "🧠", "⚡", "🔎", "✍️", "🩹", "🎨", "💻"];
 
 /** Starting points for an agency-style team. Instructions' first line doubles

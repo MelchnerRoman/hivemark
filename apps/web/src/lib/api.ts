@@ -108,7 +108,7 @@ export function fetchState(): Promise<BackendState> {
 }
 
 /** The provider's current models (empty if the server can't ask it). */
-export function fetchModels(provider: "anthropic" | "openrouter"): Promise<string[]> {
+export function fetchModels(provider: "anthropic" | "openrouter" | "codex"): Promise<string[]> {
   return request<{ models: string[] }>(`/api/models?provider=${provider}`).then((r) => r.models);
 }
 

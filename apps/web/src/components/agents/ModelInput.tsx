@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { fetchModels } from "@/lib/api";
-import { AGENT_MODEL_OPTIONS } from "@/lib/agent-constants";
+import { AGENT_MODEL_OPTIONS, modelProvider } from "@/lib/agent-constants";
 
 /** Models come from the provider (Anthropic's models API, OpenRouter's
- * catalog); AGENT_MODEL_OPTIONS is only the fallback when there's no API key
- * to ask with. An empty value picks the newest Sonnet. */
+ * catalog, the Codex CLI's own list); AGENT_MODEL_OPTIONS is only the
+ * fallback when there's no Anthropic key to ask with. An empty value picks
+ * the newest Sonnet for Claude runtimes, and means "Codex's own default" for Codex. */
 export function ModelInput({
   runtimeId,
   value,
@@ -18,24 +19,25 @@ export function ModelInput({
   onChange: (model: string) => void;
   label?: string;
 }) {
-  const isOpenRouter = runtimeId === "runtime-openrouter";
+  const provider = modelProvider(runtimeId);
   const [models, setModels] = useState<string[]>([]);
 
   useEffect(() => {
     let live = true;
-    fetchModels(isOpenRouter ? "openrouter" : "anthropic")
+    setModels([]);
+    fetchModels(provider)
       .catch(() => [])
-      .then((m) => live && setModels(m.length || isOpenRouter ? m : [...AGENT_MODEL_OPTIONS]));
+      .then((m) => live && setModels(m.length || provider !== "anthropic" ? m : [...AGENT_MODEL_OPTIONS]));
     return () => {
       live = false;
     };
-  }, [isOpenRouter]);
+  }, [provider]);
 
   useEffect(() => {
-    if (!value && !isOpenRouter && models.length) onChange(models.find((m) => /sonnet/i.test(m)) ?? models[0]);
-  }, [value, isOpenRouter, models, onChange]);
+    if (!value && provider === "anthropic" && models.length) onChange(models.find((m) => /sonnet/i.test(m)) ?? models[0]);
+  }, [value, provider, models, onChange]);
 
-  if (isOpenRouter) {
+  if (provider === "openrouter") {
     return (
       <div>
         <label className="mb-1.5 block text-xs font-medium text-foreground-muted">{label}</label>
@@ -66,6 +68,7 @@ export function ModelInput({
         onChange={(e) => onChange(e.target.value)}
         className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
       >
+        {provider === "codex" && <option value="">Codex default (from your Codex config)</option>}
         {/* keep an agent's current model selectable even if the provider retired it */}
         {[...(value && !models.includes(value) ? [value] : []), ...models].map((m) => (
           <option key={m} value={m}>

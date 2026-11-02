@@ -4,7 +4,7 @@ import { FormEvent, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { useStore } from "@/lib/store";
-import { AGENT_COLOR_OPTIONS, AGENT_EMOJI_OPTIONS, AGENT_ROLE_PRESETS } from "@/lib/agent-constants";
+import { AGENT_COLOR_OPTIONS, AGENT_EMOJI_OPTIONS, AGENT_ROLE_PRESETS, modelProvider } from "@/lib/agent-constants";
 import { RuntimeSelect } from "@/components/agents/RuntimeSelect";
 import { ModelInput } from "@/components/agents/ModelInput";
 
@@ -53,11 +53,9 @@ function CreateAgentForm({
   const canSubmit = name.trim().length > 0 && taskRoomId.length > 0;
 
   function handleRuntimeChange(nextRuntimeId: string) {
-    const switchingToOpenRouter = nextRuntimeId === "runtime-openrouter" && runtimeId !== "runtime-openrouter";
-    const switchingAwayFromOpenRouter = runtimeId === "runtime-openrouter" && nextRuntimeId !== "runtime-openrouter";
     setRuntimeId(nextRuntimeId);
-    if (switchingToOpenRouter) setModel("");
-    else if (switchingAwayFromOpenRouter) setModel(agentDefaults.model);
+    // another provider's model list: "" lets ModelInput pick its default
+    if (modelProvider(nextRuntimeId) !== modelProvider(runtimeId)) setModel("");
   }
 
   function applyPreset(preset: (typeof AGENT_ROLE_PRESETS)[number]) {
