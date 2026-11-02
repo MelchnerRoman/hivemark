@@ -323,6 +323,8 @@ db.prepare("INSERT OR IGNORE INTO mcp_tools (id, name, description, icon) VALUES
     db.exec("ALTER TABLE direct_messages ADD COLUMN member_id TEXT");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_direct_messages_thread ON direct_messages(agent_id, member_id, created_at)");
+  // /api/state loads the caller's DMs (WHERE member_id = ? ORDER BY created_at).
+  db.exec("CREATE INDEX IF NOT EXISTS idx_direct_messages_member ON direct_messages(member_id, created_at)");
 }
 
 // Expired sessions are otherwise harmless (rejected at lookup) — a boot-time
@@ -759,7 +761,9 @@ const stmtActiveLoops = db.prepare("SELECT * FROM loops WHERE active = 1");
 // ---------------------------------------------------------------------------
 
 export const repo = {
-  getState(): AppState {
+  /** Everything, except DMs: only `dmMemberId`'s own threads (DMs are
+   * private — loading every member's just to filter them out was wasted). */
+  getState(dmMemberId: string): AppState {
     return {
       members: (db.prepare("SELECT * FROM members").all() as any[]).map(rowToMember),
       mcpTools: (db.prepare("SELECT * FROM mcp_tools").all() as any[]).map(
@@ -771,9 +775,9 @@ export const repo = {
       })(),
       taskRooms: (db.prepare("SELECT * FROM task_rooms").all() as any[]).map(rowToTaskRoom),
       messages: (db.prepare("SELECT * FROM messages ORDER BY created_at ASC").all() as any[]).map(rowToMessage),
-      directMessages: (db.prepare("SELECT * FROM direct_messages ORDER BY created_at ASC").all() as any[]).map(
-        rowToDm
-      ),
+      directMessages: (
+        db.prepare("SELECT * FROM direct_messages WHERE member_id = ? ORDER BY created_at ASC").all(dmMemberId) as any[]
+      ).map(rowToDm),
       agents: (db.prepare("SELECT * FROM agents").all() as any[]).map(rowToAgent),
       agentTeams: (db.prepare("SELECT * FROM agent_teams").all() as any[]).map(rowToTeam),
       agentRuntimes: (db.prepare("SELECT * FROM agent_runtimes").all() as any[]).map(rowToRuntime),
@@ -806,12 +810,11 @@ export const repo = {
    * agents, workflows, loops, todos). members/mcpTools/agentTeams/runtimes/
    * defaults/behaviorSettings/connections stay unscoped. DMs are private to
    * their member for everyone, the owner included.
-   * Internal callers (claudeAgent.ts, scheduler.ts) keep using the plain
-   * unscoped getState() above — they need the full picture regardless of
-   * any human viewer. */
+   * Visibility is computed in memory from the rooms/task rooms loaded here —
+   * the same rule as isTaskRoomMember/canSeeAgent, minus their per-agent and
+   * per-DM queries (thousands per request for a non-owner). */
   getScopedState(callerId: string): AppState {
-    const all = repo.getState();
-    const full = { ...all, directMessages: all.directMessages.filter((dm) => dm.memberId === callerId) };
+    const full = repo.getState(callerId);
     if (repo.getMemberRole(callerId) === "owner") return full;
 
     const visibleRoomIds = new Set(full.rooms.filter((r) => r.memberIds.includes(callerId)).map((r) => r.id));
@@ -820,6 +823,11 @@ export const repo = {
         .filter((t) => visibleRoomIds.has(t.roomId) && t.memberIds.includes(callerId))
         .map((t) => t.id)
     );
+    // Only agents this member can see (and so @mention or DM) — canSeeAgent's rule.
+    const agents = full.agents.filter(
+      (a) => visibleTaskRoomIds.has(a.taskRoomId) || (!!a.roomId && visibleRoomIds.has(a.roomId))
+    );
+    const visibleAgentIds = new Set(agents.map((a) => a.id));
 
     return {
       ...full,
@@ -828,11 +836,8 @@ export const repo = {
         .map((r) => ({ ...r, taskRoomIds: r.taskRoomIds.filter((id) => visibleTaskRoomIds.has(id)) })),
       taskRooms: full.taskRooms.filter((t) => visibleTaskRoomIds.has(t.id)),
       messages: full.messages.filter((m) => visibleTaskRoomIds.has(m.taskRoomId)),
-      // Only agents this member can see (and so @mention or DM) — see canSeeAgent.
-      agents: full.agents.filter((a) => repo.canSeeAgent(callerId, a)),
-      directMessages: full.directMessages.filter((dm) =>
-        full.agents.some((a) => a.id === dm.agentId && repo.canSeeAgent(callerId, a))
-      ),
+      agents,
+      directMessages: full.directMessages.filter((dm) => visibleAgentIds.has(dm.agentId)),
       workflows: full.workflows.filter((w) => visibleTaskRoomIds.has(w.taskRoomId)),
       loops: full.loops.filter((l) => visibleTaskRoomIds.has(l.taskRoomId)),
       todos: full.todos.filter((t) => visibleTaskRoomIds.has(t.taskRoomId)),
