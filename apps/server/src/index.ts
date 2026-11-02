@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { WebSocketServer, type VerifyClientCallbackSync } from "ws";
 import { repo } from "./db.js";
 import { bus } from "./events.js";
-import { findMentionedAgents, runAgentTurn, stopAgentTurn } from "./claudeAgent.js";
+import { findMentionedAgents, getTurnBridge, runAgentTurn, stopAgentTurn } from "./claudeAgent.js";
 import { startScheduler } from "./scheduler.js";
 import { getClaudeCodeAuthStatus, triggerClaudeCodeLogin } from "./claudeCodeAuth.js";
 import { isCliAvailable } from "./cliCheck.js";
@@ -244,6 +244,28 @@ app.post("/internal/rooms/:roomId/preview/stop", (req, res) => {
   if (!requireInternalToken(req, res)) return;
   res.json(stopPreview(req.params.roomId));
 });
+// Workspace tools for a Claude Code turn in flight (mcp/workspaceMcpServer.ts):
+// 404 once the turn is over, so a lingering child can't act afterwards.
+app.get("/internal/turns/:token/tools", (req, res) => {
+  if (!requireInternalToken(req, res)) return;
+  const bridge = getTurnBridge(req.params.token);
+  if (!bridge) return res.sendStatus(404);
+  res.json(bridge.workspace.defs);
+});
+app.post(
+  "/internal/turns/:token/tools/:name",
+  handle(async (req, res) => {
+    if (!requireInternalToken(req, res)) return;
+    const bridge = getTurnBridge(req.params.token);
+    if (!bridge) return res.sendStatus(404);
+    try {
+      const result = await bridge.workspace.call(req.params.name, req.body ?? {}, bridge.signal);
+      res.json(result ?? { text: `Unknown tool: ${req.params.name}`, isError: true });
+    } catch (err) {
+      res.json({ text: `Tool call failed: ${err instanceof Error ? err.message : String(err)}`, isError: true });
+    }
+  })
+);
 
 app.use(requireAuth);
 

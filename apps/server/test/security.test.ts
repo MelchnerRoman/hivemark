@@ -70,6 +70,12 @@ describe("auth disabled (local mode)", () => {
     assert.equal(await rawGet(s.url, "/api/state"), 200);
   });
 
+  test("the Claude Code tool bridge only answers our own children", async () => {
+    // no internal token -> refused, whatever the turn token
+    assert.equal((await s.req("/internal/turns/anything/tools")).status, 403);
+    assert.equal((await s.req("/internal/turns/anything/tools/add_todo", { method: "POST", body: "{}" })).status, 403);
+  });
+
   test("attachments must exist in the project folder", async () => {
     const res = await s.req("/api/task-rooms/tr-onboarding/messages", {
       method: "POST",

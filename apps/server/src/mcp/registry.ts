@@ -34,6 +34,21 @@ const IS_TS_RUNTIME = import.meta.url.endsWith(".ts");
 const PREVIEW_SERVER_ENTRY = path.join(import.meta.dirname, IS_TS_RUNTIME ? "previewMcpServer.ts" : "previewMcpServer.js");
 const TSX_BIN = path.join(import.meta.dirname, "..", "..", "..", "..", "node_modules", ".bin", "tsx");
 
+/** Launch spec for one of our own MCP server scripts in this directory
+ * (same dev-vs-packaged logic as "mcp-preview" below). */
+export function firstPartyServer(name: string, args: string[], env: Record<string, string>) {
+  return {
+    command: IS_TS_RUNTIME ? TSX_BIN : process.execPath,
+    args: [path.join(import.meta.dirname, IS_TS_RUNTIME ? `${name}.ts` : `${name}.js`), ...args],
+    env: {
+      HIVEMARK_INTERNAL_TOKEN: INTERNAL_TOKEN,
+      HIVEMARK_INTERNAL_PORT: process.env.PORT ?? "4001",
+      ...(IS_TS_RUNTIME ? {} : { ELECTRON_RUN_AS_NODE: "1" }),
+      ...env,
+    },
+  };
+}
+
 export const MCP_TOOL_REGISTRY: Record<string, StdioToolConfig | HttpToolConfig> = {
   "mcp-browser": {
     kind: "stdio",

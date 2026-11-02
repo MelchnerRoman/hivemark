@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { repo } from "./db.js";
@@ -277,6 +278,15 @@ function webResearchTools(modelId: string): Anthropic.ToolUnion[] {
 // (see stopAgentTurn). Triggers that arrive mid-turn are queued (one per
 // conversation) and run afterwards, instead of being dropped.
 const agentsInFlight = new Map<string, AbortController>();
+
+// Workspace tools of in-flight Claude Code turns, by a per-turn token: the
+// CLI reaches them through our own MCP server (mcp/workspaceMcpServer.ts),
+// which calls back into /internal/turns/<token>/ — see index.ts.
+type Workspace = ReturnType<typeof createWorkspaceTools>;
+const turnBridges = new Map<string, { workspace: Workspace; signal: AbortSignal }>();
+export function getTurnBridge(token: string) {
+  return turnBridges.get(token) ?? null;
+}
 const queuedTurns = new Map<string, Turn[]>();
 
 function conversationKey(turn: Turn) {
@@ -380,8 +390,13 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
   // attachments that never happen.
   const runsOurTools = runtime === "runtime-hivemark" || runtime === "runtime-openrouter";
   const { session, tools: mcpTools } = await getSessionForAgent(agentId, runsOurTools ? grantedToolIds : [], roomId);
+  const bridged = runtime === "runtime-claude-code";
   const workspace =
-    runsOurTools && turn.kind === "task_room" && roomId ? createWorkspaceTools(turn.taskRoomId, roomId) : null;
+    (runsOurTools || bridged) && turn.kind === "task_room" && roomId
+      ? createWorkspaceTools(turn.taskRoomId, roomId)
+      : null;
+  const turnToken = bridged && workspace ? randomBytes(24).toString("hex") : null;
+  if (turnToken) turnBridges.set(turnToken, { workspace: workspace!, signal });
   const tools = [...mcpTools, ...(workspace?.defs ?? [])];
   // A throwing tool (network error, non-JSON error page, disk full) is a
   // tool_result error the model can react to, not a failed turn.
@@ -430,7 +445,7 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
         finalText = await runOpenRouterTurn(agent, system, history, callTool, tools, signal);
         break;
       case "runtime-claude-code":
-        finalText = await runClaudeCodeTurn(agent, system, history, roomId, signal);
+        finalText = await runClaudeCodeTurn(agent, system, history, roomId, signal, turnToken);
         break;
       case "runtime-codex":
         finalText = await runCodexTurn(agent, system, history, roomId, signal);
@@ -510,6 +525,7 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
     // Session is cached per-agent (see mcp/manager.ts) and reused by the next
     // turn — not closed here, unlike a one-shot connection.
     session.inUse--;
+    if (turnToken) turnBridges.delete(turnToken);
     notifySync();
   }
 }

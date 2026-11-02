@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import { tmpdir } from "node:os";
+import path from "node:path";
+import { repo } from "./db.js";
 import { resolveModelId } from "./modelIds.js";
-import { getAgentWorkspaceDir, getRoomProjectDir, hasBashAccess } from "./agentSandbox.js";
+import { getAgentWorkspaceDir, getRoomProjectDir, hasBashAccess, TOOL_ACCESS_ENABLED } from "./agentSandbox.js";
+import { firstPartyServer, MCP_TOOL_REGISTRY } from "./mcp/registry.js";
 import type { Agent } from "./types.js";
 import type { HistoryMessage } from "./claudeAgent.js";
 
@@ -14,6 +18,43 @@ const BASH_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"];
 const READ_TOOLS = ["Read", "Glob", "Grep"];
 const WRITE_TOOLS = ["Write", "Edit"];
 const WEB_TOOLS = ["WebSearch", "WebFetch"];
+
+// What a stdio MCP server needs to start (npx needs PATH) — not relying on
+// the CLI to merge its own environment in.
+function baseEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const k of ["PATH", "HOME", "USER", "LANG", "TMPDIR"]) if (process.env[k]) env[k] = process.env[k]!;
+  return env;
+}
+
+/** MCP servers for this turn, in Claude Code's --mcp-config shape: our own
+ * workspace tools (via the per-turn bridge, task-room turns only) plus the
+ * agent's granted catalog tools, under the same credential / opt-in rules
+ * the API runtimes apply (mcp/manager.ts). "Files" is skipped — on this
+ * runtime it's Claude Code's own Read/Write (above). */
+function mcpServersFor(agent: Agent, roomId: string | null, turnToken: string | null): Record<string, object> {
+  const servers: Record<string, object> = {};
+  if (turnToken) {
+    servers.hivemark = { type: "stdio", ...firstPartyServer("workspaceMcpServer", [], { ...baseEnv(), HIVEMARK_TURN_TOKEN: turnToken }) };
+  }
+  for (const { toolId } of agent.grants) {
+    const config = MCP_TOOL_REGISTRY[toolId];
+    if (!config || toolId === "mcp-filesystem") continue;
+    if (toolId === "mcp-preview" && (!TOOL_ACCESS_ENABLED || !roomId)) continue;
+    const credential = config.connectionKey ? repo.getConnectionValue(config.connectionKey) : null;
+    if (config.connectionKey && !credential) continue;
+    servers[toolId] =
+      config.kind === "http"
+        ? { type: "http", url: config.url, headers: config.headers(credential!) }
+        : {
+            type: "stdio",
+            command: config.command,
+            args: config.args(credential, agent.id, roomId),
+            env: { ...baseEnv(), ...(config.env?.(credential) ?? {}) },
+          };
+  }
+  return servers;
+}
 
 /**
  * Runs a turn by spawning the actual Claude Code CLI (`claude -p`) instead of
@@ -41,7 +82,8 @@ export function runClaudeCodeTurn(
   system: string,
   history: HistoryMessage[],
   roomId: string | null,
-  signal: AbortSignal
+  signal: AbortSignal,
+  turnToken: string | null
 ): Promise<string> {
   const transcript = history.map((m) => `${m.role === "assistant" ? "You" : "Message"}: ${m.content}`).join("\n\n");
   const prompt = `${transcript}\n\nRespond with your next message only, no preamble.`;
@@ -57,6 +99,15 @@ export function runClaudeCodeTurn(
       ? [...READ_TOOLS, ...(granted("mcp-filesystem") ? WRITE_TOOLS : [])]
       : [];
   if (granted("web-research")) tools.push(...WEB_TOOLS);
+
+  // Config goes in a private temp file, not argv: it can hold credentials
+  // (GitHub token, Postgres URL), and argv is visible to every local user.
+  const servers = mcpServersFor(agent, roomId, turnToken);
+  const configDir = fs.mkdtempSync(path.join(tmpdir(), "hivemark-mcp-"));
+  const configPath = path.join(configDir, "mcp.json");
+  fs.writeFileSync(configPath, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
+  // Headless -p can't prompt for approval — pre-approve what we granted.
+  const allowed = [...(granted("web-research") ? WEB_TOOLS : []), ...Object.keys(servers).map((name) => `mcp__${name}`)];
 
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -74,8 +125,12 @@ export function runClaudeCodeTurn(
         "--tools",
         tools.join(","),
         ...(workspaceDir ? ["--add-dir", workspaceDir, "--permission-mode", "acceptEdits"] : []),
-        // Headless -p can't prompt for approval — pre-approve the web tools.
-        ...(granted("web-research") ? ["--allowedTools", WEB_TOOLS.join(",")] : []),
+        // --strict-mcp-config: only our servers — never the MCP servers from
+        // the user's personal Claude Code config on this machine.
+        "--mcp-config",
+        configPath,
+        "--strict-mcp-config",
+        ...(allowed.length ? ["--allowedTools", allowed.join(",")] : []),
       ],
       { stdio: ["pipe", "pipe", "pipe"], cwd: workspaceDir ?? tmpdir(), signal }
     );
@@ -96,6 +151,7 @@ export function runClaudeCodeTurn(
     });
 
     child.on("close", (code) => {
+      fs.rmSync(configDir, { recursive: true, force: true });
       if (code !== 0) {
         reject(new Error(`Claude Code exited with code ${code}: ${stderr.trim() || "no error output"}`));
         return;
