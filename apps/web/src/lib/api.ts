@@ -130,11 +130,11 @@ export function removeConnection(key: ConnectionKey): Promise<void> {
  * The backend fires a `sync` push on essentially every mutation anywhere in the
  * workspace, so a burst of closely-spaced mutations (e.g. an agent posting
  * several messages in a row) can otherwise trigger a full `/api/state` refetch
- * per push. Debounce on a short trailing edge so a burst collapses into one. */
+ * per push. The caller debounces (the store's refresh()), which also merges a
+ * push with the refetch the mutating action itself triggers. */
 export function connectSync(onSync: () => void): () => void {
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
 
   let reconnecting = false;
@@ -149,11 +149,7 @@ export function connectSync(onSync: () => void): () => void {
     };
     socket.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === "sync") {
-          if (debounceTimer) clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(onSync, 150);
-        }
+        if (JSON.parse(event.data).type === "sync") onSync();
       } catch {
         // ignore malformed frames
       }
@@ -161,6 +157,7 @@ export function connectSync(onSync: () => void): () => void {
     socket.onclose = () => {
       if (closed) return;
       reconnecting = true;
+      onSync(); // fails while the backend is down, which is what shows the offline banner
       reconnectTimer = setTimeout(connect, 2000);
     };
   }
@@ -169,7 +166,6 @@ export function connectSync(onSync: () => void): () => void {
   return () => {
     closed = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (debounceTimer) clearTimeout(debounceTimer);
     socket?.close();
   };
 }

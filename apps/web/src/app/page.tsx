@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useStore } from "@/lib/store";
-import { connectSync, exchangeAuthCode } from "@/lib/api";
+import { refresh, useStore } from "@/lib/store";
+import { BACKEND_URL, connectSync, exchangeAuthCode } from "@/lib/api";
+import { Button } from "@/components/ui/Button";
 import { setToken } from "@/lib/auth";
 import { LoginScreen } from "@/components/auth/LoginScreen";
 import { RoomSidebar } from "@/components/nav/RoomSidebar";
@@ -24,6 +25,8 @@ export default function Home() {
   const [loaded, setLoaded] = useState(false);
   const [needsLogin, setNeedsLogin] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const syncError = useStore((s) => s.syncError);
 
   useEffect(() => {
     if (typeof Notification !== "undefined" && Notification.permission === "default") {
@@ -64,13 +67,9 @@ export default function Home() {
       // a socket nothing will ever close.
       if (cancelled) return;
       setLoaded(true);
-      disconnect = connectSync(() => {
-        // Clear on success so one failed resync doesn't brick the app for good.
-        hydrate().then(
-          () => setError(null),
-          (err) => setError(err instanceof Error ? err.message : String(err))
-        );
-      });
+      // Failures after boot surface as the syncError banner below, not the
+      // full-screen error: keeps the user's open view and drafts mounted.
+      disconnect = connectSync(refresh);
     }
 
     boot().catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -78,7 +77,7 @@ export default function Home() {
       cancelled = true;
       disconnect?.();
     };
-  }, [hydrate, loadMe]);
+  }, [hydrate, loadMe, attempt]);
 
   if (needsLogin) {
     return <LoginScreen authError={authError} />;
@@ -91,29 +90,48 @@ export default function Home() {
           <p className="font-display text-lg font-semibold">Can&apos;t reach the Hivemark backend</p>
           <p className="mt-2 text-sm text-foreground-muted">{error}</p>
           <p className="mt-2 text-sm text-foreground-muted">
-            Make sure the server is running (<code>npm run dev</code> in <code>apps/server</code>) on
-            localhost:4001.
+            Make sure the server is running (<code>npm run dev</code> in <code>apps/server</code>) at {BACKEND_URL}.
           </p>
+          <Button
+            className="mt-4"
+            onClick={() => {
+              setError(null);
+              setAttempt((n) => n + 1);
+            }}
+          >
+            Try again
+          </Button>
         </div>
       </div>
     );
   }
 
   if (!loaded) {
-    return <div className="flex h-screen w-full items-center justify-center bg-background text-foreground-muted">Loading…</div>;
+    return (
+      <div role="status" className="flex h-screen w-full items-center justify-center bg-background text-foreground-muted">
+        Loading…
+      </div>
+    );
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
-      <RoomSidebar />
-      {view === "agents" && <AgentsGalleryView />}
-      {view === "dm" && <DirectMessageView key={dmAgentId} />}
-      {view === "rooms" && (
-        <>
-          <TaskRoomList />
-          <TaskRoomWorkspace />
-        </>
+    <div className="flex h-screen w-full flex-col overflow-hidden bg-background text-foreground">
+      {syncError && (
+        <div role="alert" className="shrink-0 bg-danger-soft px-4 py-1.5 text-center text-sm text-danger">
+          Lost connection to the Hivemark backend — reconnecting… Changes made now may not be saved.
+        </div>
       )}
+      <div className="flex min-h-0 w-full flex-1">
+        <RoomSidebar />
+        {view === "agents" && <AgentsGalleryView />}
+        {view === "dm" && <DirectMessageView key={dmAgentId} />}
+        {view === "rooms" && (
+          <>
+            <TaskRoomList />
+            <TaskRoomWorkspace />
+          </>
+        )}
+      </div>
     </div>
   );
 }

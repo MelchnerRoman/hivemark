@@ -43,8 +43,43 @@ let appliedHydrateSeq = 0;
 function sameJSON(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
-function keepIfSame<T>(prev: T, next: T): T {
-  return sameJSON(prev, next) ? prev : next;
+/** For arrays this works per element (matched by id): one new chat message
+ * must not hand every other message a fresh reference, or each filtered
+ * useShallow selector (e.g. another Task Room's chat) re-renders anyway. */
+export function keepIfSame<T>(prev: T, next: T): T {
+  if (!Array.isArray(prev) || !Array.isArray(next)) return sameJSON(prev, next) ? prev : next;
+  const byId = new Map(prev.map((x, i) => [x?.id ?? i, x]));
+  let changed = prev.length !== next.length;
+  const merged = next.map((x, i) => {
+    const old = byId.get(x?.id ?? i);
+    const kept = old !== undefined && sameJSON(old, x) ? old : x;
+    if (kept !== prev[i]) changed = true;
+    return kept;
+  });
+  return (changed ? merged : prev) as T;
+}
+
+/** One shared, debounced refetch for both halves of a mutation: the action's
+ * own HTTP response and the server's websocket "sync" push for that same
+ * mutation land within a few ms of each other and used to fetch the full
+ * state twice. Also used for bursts of pushes (an agent posting repeatedly). */
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+export function refresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    useStore.getState().hydrate().then(
+      () => useStore.getState().syncError && useStore.setState({ syncError: null }),
+      (err) => useStore.setState({ syncError: err instanceof Error ? err.message : String(err) })
+    );
+  }, 150);
+}
+
+/** Failure path for actions: tell the user, and resync so an optimistic
+ * change that never reached the server is rolled back. */
+function fail(err: unknown) {
+  alert(err instanceof Error ? err.message : String(err));
+  refresh();
 }
 
 /** Fires a real desktop notification for agent messages that just arrived while
@@ -108,6 +143,9 @@ type Store = {
   agentDefaults: AgentDefaults;
 
   hydrate: () => Promise<void>;
+  /** Last background-sync failure (backend unreachable), cleared on the next
+   * successful sync. Shown as a banner instead of tearing the app down. */
+  syncError: string | null;
   /** Populates currentMemberId from /api/auth/me — called once on boot (see
    * page.tsx's login gate), separately from hydrate() since identity now
    * comes from the authenticated session, not the general state payload. */
@@ -200,6 +238,7 @@ export const useStore = create<Store>((set, get) => ({
   view: "rooms",
   agentDefaults: DEFAULT_AGENT_DEFAULTS,
 
+  syncError: null,
   hydrate: async () => {
     const seq = ++hydrateSeq;
     const state = await api.fetchState();
@@ -269,19 +308,16 @@ export const useStore = create<Store>((set, get) => ({
 
   setAgentDefaults: (defaults) => {
     set({ agentDefaults: defaults });
-    api.setAgentDefaults(defaults).then(() => get().hydrate());
+    api.setAgentDefaults(defaults).then(refresh, fail);
   },
   setAgentBehaviorSetting: (key, value) => {
     set((s) => ({ agentBehaviorSettings: { ...s.agentBehaviorSettings, [key]: value } }));
-    api.setAgentBehaviorSetting(key, value).then(() => get().hydrate());
+    api.setAgentBehaviorSetting(key, value).then(refresh, fail);
   },
   installRuntime: (runtimeId) => {
     // No optimistic update here — unlike most actions, this one has a real chance of
     // failing (the CLI genuinely isn't installed), so wait for the actual result.
-    api
-      .installRuntime(runtimeId)
-      .then(() => get().hydrate())
-      .catch((err) => alert(err instanceof Error ? err.message : String(err)));
+    api.installRuntime(runtimeId).then(refresh, fail);
   },
   installMcpTool: async (toolId) => {
     try {
@@ -295,45 +331,44 @@ export const useStore = create<Store>((set, get) => ({
   createRoom: (name, emoji) => {
     api.createRoom(name, emoji).then((room) => {
       set({ selectedRoomId: room.id, selectedTaskRoomId: null });
-      get().hydrate();
-    });
+      refresh();
+    }, fail);
   },
 
   createTaskRoom: (roomId, name, emoji) => {
     api.createTaskRoom(roomId, name, emoji).then((taskRoom) => {
       set({ selectedTaskRoomId: taskRoom.id, activeTab: "chat" });
-      get().hydrate();
-    });
+      refresh();
+    }, fail);
   },
 
   addMemberToRoom: (roomId, memberId) => {
-    api.addMemberToRoom(roomId, memberId).then(() => get().hydrate());
+    api.addMemberToRoom(roomId, memberId).then(refresh, fail);
   },
 
   removeMemberFromRoom: (roomId, memberId) => {
     api
       .removeMemberFromRoom(roomId, memberId)
-      .then(() => get().hydrate())
-      .catch((err) => alert(err instanceof Error ? err.message : String(err)));
+      .then(refresh, fail);
   },
 
   addAgentToRoom: (roomId, agentId) => {
     set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, roomId } : a)) }));
-    api.addAgentToRoom(roomId, agentId).then(() => get().hydrate());
+    api.addAgentToRoom(roomId, agentId).then(refresh, fail);
   },
 
   removeAgentFromRoom: (roomId, agentId) => {
     set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, roomId: null } : a)) }));
-    api.removeAgentFromRoom(roomId, agentId).then(() => get().hydrate());
+    api.removeAgentFromRoom(roomId, agentId).then(refresh, fail);
   },
 
   addTeamToRoom: (roomId, teamId) => {
-    api.addTeamToRoom(roomId, teamId).then(() => get().hydrate());
+    api.addTeamToRoom(roomId, teamId).then(refresh, fail);
   },
 
   setTaskRoomStatus: (taskRoomId, status) => {
     set((s) => ({ taskRooms: s.taskRooms.map((t) => (t.id === taskRoomId ? { ...t, status } : t)) }));
-    api.setTaskRoomStatus(taskRoomId, status).then(() => get().hydrate());
+    api.setTaskRoomStatus(taskRoomId, status).then(refresh, fail);
   },
 
   sendMessage: (taskRoomId, content, attachments = []) => {
@@ -350,8 +385,7 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({ messages: [...s.messages, optimistic] }));
     api
       .sendMessage(taskRoomId, content, attachments)
-      .then(() => get().hydrate())
-      .catch((err) => {
+      .then(refresh, (err) => {
         set((s) => ({ messages: s.messages.filter((m) => m.id !== optimistic.id) }));
         alert(err instanceof Error ? err.message : String(err));
       });
@@ -370,8 +404,7 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({ directMessages: [...s.directMessages, optimistic] }));
     api
       .sendDirectMessage(agentId, content)
-      .then(() => get().hydrate())
-      .catch((err) => {
+      .then(refresh, (err) => {
         set((s) => ({ directMessages: s.directMessages.filter((m) => m.id !== optimistic.id) }));
         alert(err instanceof Error ? err.message : String(err));
       });
@@ -383,12 +416,12 @@ export const useStore = create<Store>((set, get) => ({
         m.id === messageId ? { ...m, content, editedAt: new Date().toISOString() } : m
       ),
     }));
-    api.editMessage(messageId, content).then(() => get().hydrate()).catch((err) => alert(err instanceof Error ? err.message : String(err)));
+    api.editMessage(messageId, content).then(refresh, fail);
   },
 
   deleteMessage: (messageId) => {
     set((s) => ({ messages: s.messages.filter((m) => m.id !== messageId) }));
-    api.deleteMessage(messageId).then(() => get().hydrate()).catch((err) => alert(err instanceof Error ? err.message : String(err)));
+    api.deleteMessage(messageId).then(refresh, fail);
   },
 
   editDirectMessage: (dmId, content) => {
@@ -397,18 +430,18 @@ export const useStore = create<Store>((set, get) => ({
         m.id === dmId ? { ...m, content, editedAt: new Date().toISOString() } : m
       ),
     }));
-    api.editDirectMessage(dmId, content).then(() => get().hydrate()).catch((err) => alert(err instanceof Error ? err.message : String(err)));
+    api.editDirectMessage(dmId, content).then(refresh, fail);
   },
 
   deleteDirectMessage: (dmId) => {
     set((s) => ({ directMessages: s.directMessages.filter((m) => m.id !== dmId) }));
-    api.deleteDirectMessage(dmId).then(() => get().hydrate()).catch((err) => alert(err instanceof Error ? err.message : String(err)));
+    api.deleteDirectMessage(dmId).then(refresh, fail);
   },
 
   createAgent: (taskRoomId, name, instructions, color, avatarEmoji, model, runtimeId, toolIds) => {
     api
       .createAgent({ taskRoomId, name, instructions, color, avatarEmoji, model, runtimeId, toolIds })
-      .then(() => get().hydrate());
+      .then(refresh, fail);
   },
 
   toggleAgentTool: (agentId, toolId) => {
@@ -424,92 +457,92 @@ export const useStore = create<Store>((set, get) => ({
         };
       }),
     }));
-    api.toggleAgentTool(agentId, toolId).then(() => get().hydrate());
+    api.toggleAgentTool(agentId, toolId).then(refresh, fail);
   },
 
   updateAgentConfig: (agentId, model, runtimeId) => {
     set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, model, runtimeId } : a)) }));
-    api.updateAgentConfig(agentId, { model, runtimeId }).then(() => get().hydrate());
+    api.updateAgentConfig(agentId, { model, runtimeId }).then(refresh, fail);
   },
 
   removeAgent: (agentId) => {
     set((s) => ({ agents: s.agents.filter((a) => a.id !== agentId) }));
-    api.removeAgent(agentId).then(() => get().hydrate());
+    api.removeAgent(agentId).then(refresh, fail);
   },
 
   runAgent: (agentId) => {
     set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, status: "running" } : a)) }));
-    api.runAgent(agentId).then(() => get().hydrate());
+    api.runAgent(agentId).then(refresh, fail);
   },
 
   stopAgent: (agentId) => {
     set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, status: "idle" } : a)) }));
-    api.stopAgent(agentId).then(() => get().hydrate());
+    api.stopAgent(agentId).then(refresh, fail);
   },
 
   stopAllAgents: () => {
     set((s) => ({ agents: s.agents.map((a) => (a.status === "running" ? { ...a, status: "idle" } : a)) }));
-    api.stopAllAgents().then(() => get().hydrate());
+    api.stopAllAgents().then(refresh, fail);
   },
 
   createWorkflow: (taskRoomId, name, description) => {
-    api.createWorkflow(taskRoomId, name, description).then(() => get().hydrate());
+    api.createWorkflow(taskRoomId, name, description).then(refresh, fail);
   },
 
   toggleWorkflowStep: (workflowId, stepId) => {
-    api.toggleWorkflowStep(workflowId, stepId).then(() => get().hydrate());
+    api.toggleWorkflowStep(workflowId, stepId).then(refresh, fail);
   },
 
   addWorkflowStep: (workflowId, name) => {
-    api.addWorkflowStep(workflowId, name).then(() => get().hydrate());
+    api.addWorkflowStep(workflowId, name).then(refresh, fail);
   },
 
   markWorkflowDone: (workflowId) => {
     set((s) => ({ workflows: s.workflows.map((w) => (w.id === workflowId ? { ...w, status: "done" } : w)) }));
-    api.markWorkflowDone(workflowId).then(() => get().hydrate());
+    api.markWorkflowDone(workflowId).then(refresh, fail);
   },
 
   removeWorkflow: (workflowId) => {
     set((s) => ({ workflows: s.workflows.filter((w) => w.id !== workflowId) }));
-    api.removeWorkflow(workflowId).then(() => get().hydrate());
+    api.removeWorkflow(workflowId).then(refresh, fail);
   },
 
   createLoop: (taskRoomId, name, schedule) => {
-    api.createLoop(taskRoomId, name, schedule).then(() => get().hydrate());
+    api.createLoop(taskRoomId, name, schedule).then(refresh, fail);
   },
 
   toggleLoopActive: (loopId) => {
     set((s) => ({ loops: s.loops.map((l) => (l.id === loopId ? { ...l, active: !l.active } : l)) }));
-    api.toggleLoopActive(loopId).then(() => get().hydrate());
+    api.toggleLoopActive(loopId).then(refresh, fail);
   },
 
   removeLoop: (loopId) => {
     set((s) => ({ loops: s.loops.filter((l) => l.id !== loopId) }));
-    api.removeLoop(loopId).then(() => get().hydrate());
+    api.removeLoop(loopId).then(refresh, fail);
   },
 
   addTodo: (taskRoomId, text, assigneeId, dueDate = null) => {
-    api.addTodo(taskRoomId, text, assigneeId, dueDate).then(() => get().hydrate());
+    api.addTodo(taskRoomId, text, assigneeId, dueDate).then(refresh, fail);
   },
 
   toggleTodo: (todoId) => {
     set((s) => ({ todos: s.todos.map((t) => (t.id === todoId ? { ...t, done: !t.done } : t)) }));
-    api.toggleTodo(todoId).then(() => get().hydrate());
+    api.toggleTodo(todoId).then(refresh, fail);
   },
 
   createAgentTeam: (name, agentIds, mode) => {
-    api.createAgentTeam(name, agentIds, mode).then(() => get().hydrate());
+    api.createAgentTeam(name, agentIds, mode).then(refresh, fail);
   },
 
   removeAgentTeam: (teamId) => {
     set((s) => ({ agentTeams: s.agentTeams.filter((t) => t.id !== teamId) }));
-    api.removeAgentTeam(teamId).then(() => get().hydrate());
+    api.removeAgentTeam(teamId).then(refresh, fail);
   },
 
   addTeamToTaskRoom: (teamId, taskRoomId) => {
     api.addTeamToTaskRoom(teamId, taskRoomId).then(() => {
       get().openTaskRoom(taskRoomId, "agents");
-      get().hydrate();
-    });
+      refresh();
+    }, fail);
   },
 }));
