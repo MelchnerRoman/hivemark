@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
 import { repo, LOCAL_MEMBER_ID } from "./db.js";
-import { AUTH_ENABLED, OAUTH_PROVIDERS, PUBLIC_URL, isEmailAllowed } from "./authConfig.js";
+import { AUTH_ENABLED, FRONTEND_URL, OAUTH_PROVIDERS, PUBLIC_URL, isEmailAllowed } from "./authConfig.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -25,7 +25,8 @@ function redirectUri(provider: ProviderName): string {
 // Short-lived, in-process only — fine for a single-instance server (this
 // doesn't survive a restart or a multi-instance deploy, neither of which
 // this architecture does). Pruned lazily on each access.
-const pendingStates = new Map<string, number>(); // nonce -> createdAt
+// nonce -> when it was issued, and where to send the browser afterwards
+const pendingStates = new Map<string, { createdAt: number; returnTo: string | null }>();
 const STATE_TTL_MS = 10 * 60_000;
 const loginCodes = new Map<string, { sessionToken: string; createdAt: number }>();
 const LOGIN_CODE_TTL_MS = 60_000;
@@ -41,13 +42,13 @@ function prune<K, V extends { createdAt: number } | number>(map: Map<K, V>, ttlM
 /** Also returns the state, so the login route can bind it to this browser
  * with a cookie (see index.ts) — server-side state alone doesn't stop login
  * CSRF, where a victim is sent an attacker's callback URL. */
-export function buildAuthorizeUrl(provider: ProviderName): { url: string; state: string } {
+export function buildAuthorizeUrl(provider: ProviderName, returnTo: string | null): { url: string; state: string } {
   const config = OAUTH_PROVIDERS[provider];
   if (!config) throw new Error(`${provider} is not configured`);
 
   prune(pendingStates, STATE_TTL_MS);
   const state = randomBytes(16).toString("hex");
-  pendingStates.set(state, Date.now());
+  pendingStates.set(state, { createdAt: Date.now(), returnTo });
 
   const params = new URLSearchParams({
     client_id: config.clientId,
@@ -60,11 +61,29 @@ export function buildAuthorizeUrl(provider: ProviderName): { url: string; state:
   return { url: `${config.authUrl}?${params.toString()}`, state };
 }
 
-export function verifyState(state: string | undefined): boolean {
+/** Single-use: null if the state is unknown/expired, else where to return. */
+export function consumeState(state: string | undefined): { returnTo: string | null } | null {
   prune(pendingStates, STATE_TTL_MS);
-  if (!state || !pendingStates.has(state)) return false;
-  pendingStates.delete(state); // single-use
-  return true;
+  const pending = state ? pendingStates.get(state) : undefined;
+  if (!pending) return null;
+  pendingStates.delete(state!);
+  return { returnTo: pending.returnTo };
+}
+
+/** Where a login may hand the browser back to (the one-time login code goes
+ * along in the URL): this server's own web frontend, or a loopback address —
+ * the desktop app serves its UI from 127.0.0.1, so a desktop window signed
+ * into a remote server comes back to the app instead of the hosted web page.
+ * Loopback adds no real risk: only software already on the user's machine
+ * listens there, and it could read the app's stored session anyway.
+ * Anything else: null (falls back to FRONTEND_URL). */
+export function allowedReturnTo(raw: unknown): string | null {
+  if (typeof raw !== "string" || !URL.canParse(raw)) return null;
+  const url = new URL(raw);
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const isLoopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  const isFrontend = FRONTEND_URL !== null && url.origin === new URL(FRONTEND_URL).origin;
+  return isLoopback || isFrontend ? `${url.origin}/` : null;
 }
 
 type OAuthProfile = { providerUserId: string; name: string; email: string; avatarUrl: string | null };

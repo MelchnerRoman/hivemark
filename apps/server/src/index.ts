@@ -32,7 +32,8 @@ import {
   getEnabledProviders,
   requireAuth,
   requireAuthForWebSocket,
-  verifyState,
+  consumeState,
+  allowedReturnTo,
   type ProviderName,
 } from "./auth.js";
 import type { ConnectionKey } from "./types.js";
@@ -143,8 +144,11 @@ function readCookie(req: express.Request, name: string): string | null {
 app.get("/api/auth/:provider/login", (req, res) => {
   const provider = req.params.provider as ProviderName;
   if (!getEnabledProviders().includes(provider)) return res.status(404).json({ error: "provider not configured" });
-  if (req.query.hop !== "1") return res.redirect(`${PUBLIC_URL}/api/auth/${provider}/login?hop=1`);
-  const { url, state } = buildAuthorizeUrl(provider);
+  if (req.query.hop !== "1") {
+    const ret = typeof req.query.return === "string" ? `&return=${encodeURIComponent(req.query.return)}` : "";
+    return res.redirect(`${PUBLIC_URL}/api/auth/${provider}/login?hop=1${ret}`);
+  }
+  const { url, state } = buildAuthorizeUrl(provider, allowedReturnTo(req.query.return));
   res.cookie(STATE_COOKIE, state, {
     httpOnly: true,
     sameSite: "lax", // sent on the provider's top-level redirect back to us
@@ -159,14 +163,15 @@ app.get(
   "/api/auth/:provider/callback",
   handle(async (req, res) => {
     const provider = req.params.provider as ProviderName;
-    const frontendUrl = process.env.FRONTEND_URL!;
     if (!getEnabledProviders().includes(provider)) return res.status(404).json({ error: "provider not configured" });
     const state = req.query.state as string | undefined;
     const cookieState = readCookie(req, STATE_COOKIE);
     res.clearCookie(STATE_COOKIE, { path: "/" });
-    if (!state || cookieState !== state || !verifyState(state)) {
+    const pending = state && cookieState === state ? consumeState(state) : null;
+    if (!pending) {
       return res.status(400).json({ error: "Login session expired or invalid — try signing in again." });
     }
+    const frontendUrl = pending.returnTo ?? process.env.FRONTEND_URL!;
     try {
       const loginCode = await completeOAuthLogin(provider, String(req.query.code ?? ""));
       res.redirect(`${frontendUrl}?code=${loginCode}`);

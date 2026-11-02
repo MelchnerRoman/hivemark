@@ -88,8 +88,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export function getAuthProviders(): Promise<{ providers: string[] }> {
   return request("/api/auth/providers");
 }
+/** `return` brings the browser back here after login — the server only
+ * honours its own web frontend or a loopback address (the desktop app). */
 export function loginUrl(provider: string): string {
-  return `${BACKEND_URL}/api/auth/${provider}/login`;
+  return `${BACKEND_URL}/api/auth/${provider}/login?return=${encodeURIComponent(window.location.origin + "/")}`;
 }
 export function exchangeAuthCode(code: string): Promise<{ token: string }> {
   return request("/api/auth/exchange", { method: "POST", body: JSON.stringify({ code }) });

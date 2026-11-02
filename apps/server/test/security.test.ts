@@ -180,6 +180,9 @@ describe("auth enabled (multi-user)", () => {
   test("login CSRF: OAuth callback needs the state cookie of this browser", async () => {
     const hop = await fetch(`${s.url}/api/auth/google/login`, { redirect: "manual" });
     assert.match(hop.headers.get("location") ?? "", /\/api\/auth\/google\/login\?hop=1$/);
+    // the desktop app's return address survives the hop through PUBLIC_URL
+    const desktopHop = await fetch(`${s.url}/api/auth/google/login?return=${encodeURIComponent("http://127.0.0.1:4011/")}`, { redirect: "manual" });
+    assert.match(desktopHop.headers.get("location") ?? "", /hop=1&return=http%3A%2F%2F127\.0\.0\.1%3A4011%2F$/);
     const login = await fetch(`${s.url}/api/auth/google/login?hop=1`, { redirect: "manual" });
     const state = new URL(login.headers.get("location")!).searchParams.get("state")!;
     assert.match(login.headers.get("set-cookie") ?? "", new RegExp(`hm_oauth_state=${state}`));
