@@ -166,8 +166,6 @@ export type Room = {
   taskRoomIds: string[];
 };
 
-export type WorkspaceTab = "chat" | "workflows" | "loops" | "todos" | "agents";
-
 /** Connection keys the backend knows how to store a credential for. */
 export type ConnectionKey = "anthropic" | "openrouter" | "github" | "postgres" | "slack" | "linear";
 
@@ -199,5 +197,3 @@ export type AppState = {
   todos: TodoItem[];
   connections: ConnectionStatus[];
 };
-
-export type WsMessage = { type: "sync" };
