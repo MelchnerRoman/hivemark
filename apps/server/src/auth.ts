@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
-import { repo, CURRENT_MEMBER_ID } from "./db.js";
+import { repo, LOCAL_MEMBER_ID } from "./db.js";
 import { AUTH_ENABLED, OAUTH_PROVIDERS, PUBLIC_URL, isEmailAllowed } from "./authConfig.js";
 
 declare global {
@@ -179,7 +179,7 @@ export function exchangeLoginCode(code: string): string | null {
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!AUTH_ENABLED) {
-    req.memberId = CURRENT_MEMBER_ID;
+    req.memberId = LOCAL_MEMBER_ID;
     next();
     return;
   }

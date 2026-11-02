@@ -500,6 +500,15 @@ db.prepare("UPDATE direct_messages SET author_id = ? WHERE author_type = 'member
   CURRENT_MEMBER_ID
 );
 
+/** Who every request acts as when auth is disabled: the pre-auth local member
+ * — or, for a workspace that was first set up with OAuth (so has no
+ * "m-roman"), its owner; otherwise every route would 403 for a member that
+ * doesn't exist. Fixed at boot: members can't change while auth is off. */
+export const LOCAL_MEMBER_ID: string =
+  (db.prepare("SELECT id FROM members WHERE id = ?").get(CURRENT_MEMBER_ID) as { id: string } | undefined)?.id ??
+  (db.prepare("SELECT id FROM members WHERE role = 'owner' ORDER BY rowid LIMIT 1").get() as { id: string } | undefined)?.id ??
+  CURRENT_MEMBER_ID;
+
 // ---------------------------------------------------------------------------
 // Row <-> domain-type mapping helpers
 // ---------------------------------------------------------------------------
@@ -1306,6 +1315,23 @@ export const repo = {
         .slice(0, 2)
         .map((w) => w[0]!.toUpperCase())
         .join("") || "?";
+      // Turning auth on for a workspace that was used locally: the first
+      // account (who becomes owner anyway) takes over the local member, so
+      // their existing messages, DMs, rooms and teams stay theirs.
+      const localMember = isFirstAccount ? repo.getMember(CURRENT_MEMBER_ID) : null;
+      if (localMember) {
+        db.prepare("UPDATE members SET name = ?, initials = ?, role = 'owner', email = ?, avatar_url = ? WHERE id = ?").run(
+          profile.name,
+          initials,
+          profile.email,
+          profile.avatarUrl,
+          localMember.id
+        );
+        db.prepare(
+          "INSERT INTO oauth_identities (id, member_id, provider, provider_user_id, created_at) VALUES (?,?,?,?,?)"
+        ).run(id("oauth"), localMember.id, provider, providerUserId, nowIso());
+        return repo.getMember(localMember.id)!;
+      }
       const color = palette[Math.floor(Math.random() * palette.length)];
       db.prepare("INSERT INTO members (id, name, initials, color, role, email, avatar_url) VALUES (?,?,?,?,?,?,?)").run(
         memberId,
