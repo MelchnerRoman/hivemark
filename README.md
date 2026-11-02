@@ -57,7 +57,7 @@ npm run dev:web           # http://localhost:3000
 npm run dev --workspace=desktop  # spawns apps/server itself, then opens a window
 ```
 
-Either way, on first load the app seeds itself with demo data (rooms, agents, a workflow, a loop, todos) into `apps/server/data/hivemark.db`.
+Either way, on first load (with OAuth login not configured) the app seeds itself with demo data (rooms, agents, a workflow, a loop, todos) into `apps/server/data/hivemark.db`.
 
 ## Connecting a real Claude API key
 
@@ -87,7 +87,8 @@ The Claude Code runtime card in Settings → Agent runtimes shows whether the `c
 
 **Using a Claude subscription instead of API credits:** pick the Claude Code runtime (per agent, or as the default in Settings → Agent runtimes) and sign in there with your Pro/Max account. Hivemark's grants map onto Claude Code's own tools: in a Task Room it can always read the Room's project folder (so it sees attached images/PDFs), "Files" adds Write/Edit there, "Web research" adds WebSearch/WebFetch, and Bash still needs the server-wide opt-in. The built-in `attach_file` / `generate_image` / todo tools and granted MCP tools (Browser, GitHub, ...) are passed to Claude Code too (`--mcp-config`, with `--strict-mcp-config` so your personal Claude Code MCP servers never load into an agent). Subscriptions are personal: on a shared self-hosted server every Claude Code agent runs on the one login of the server machine, so teams should use API keys there.
 
-Codex is text-only for now — granting an MCP tool to an agent on that runtime has no effect; Codex's tool-call permission requests are auto-denied (it can still reason and reply, just can't take actions on this machine) since there's no one to approve them in a headless server process. Wiring that up properly is a deliberate, separate, security-reviewed feature — not something to enable by accident.
+
+Codex and Goose don't use Hivemark's MCP tools. Codex's tool-call permission requests are auto-denied unless the server runs with `ENABLE_AGENT_TOOL_ACCESS=1` **and** the agent is granted "bash-access" — then Codex (like Claude Code's Bash) runs confined to the Room's shared project folder, or the agent's private workspace in a DM. See `apps/server/src/agentSandbox.ts`.
 
 ## MCP tools
 
@@ -95,8 +96,10 @@ Agents can be granted tools from the MCP catalog:
 
 - **Web research** — Anthropic's server-side web search + web fetch (Hivemark Agent runtime only; billed per search by Anthropic).
 - **Browser** — spawns the real `@playwright/mcp` server, no credentials needed (but you need `npx playwright install chromium` once for it to actually control a browser).
-- **GitHub**, **Postgres** — spawn the real official MCP servers over stdio, gated on the matching Connections credential.
-- **Slack**, **Linear** — implemented as direct REST/GraphQL calls (not real spawned MCP servers) using the matching Connections credential.
+- **GitHub**, **Postgres**, **Slack** — spawn real MCP servers over stdio (`@modelcontextprotocol/server-github`, `server-postgres`, `slack-mcp-server`), gated on the matching Connections credential.
+- **Linear** — Linear's hosted MCP server (`mcp.linear.app`) over Streamable HTTP, using the Linear API key.
+- **Files** — the official filesystem MCP server, confined to the Room's shared project folder and the agent's private workspace.
+- **Preview** — lets an agent start/stop its Room's live preview; only available when the server runs with `ENABLE_AGENT_TOOL_ACCESS=1`.
 
 ## Loops
 
@@ -105,8 +108,8 @@ A Loop fires recurring runs of the agents created in its Task Room. Schedules: `
 ## Building for production
 
 ```bash
-npm run build:web                              # static-exports apps/web to apps/web/out
-npm run build:desktop --workspace=desktop       # builds apps/server + packages the Electron app
+npm run build:web       # static-exports apps/web to apps/web/out
+npm run build:desktop   # build:web, then builds apps/server + packages the Electron app
 ```
 
 `build:desktop` bundles `apps/server`'s compiled `dist/` + `node_modules` into the packaged app (so it doesn't depend on the end user having Node installed), then an `afterPack` hook (`apps/desktop/scripts/afterPack.js`) rebuilds `better-sqlite3`'s native binding against Electron's own Node ABI *for each target architecture* — so the arm64 and x64 DMGs each get the right binary, whichever Mac builds them. The packaged app keeps its database in the OS app-data folder (`HIVEMARK_DATA_DIR`), not inside the app bundle. 
@@ -120,9 +123,7 @@ electron-builder is also pinned to `^25.x`, not `^26.x` — `app-builder-lib@26`
 ## Known limitations
 
 - Attachments are Task Room only (not DMs). File contents are sent to the model only for the 10 most recent messages and up to 20 MB in total (newest first); anything else is named, and agents can open it with their file tools. Very long rooms send only the most recent ~400k characters, with a note that older messages exist.
-- Claude Code / Codex / Goose runtimes don't get the built-in tools or native image input — they see attachment paths and can read them via their own file access.
-- DMs with an agent are shared by every member, not private per person.
+- Codex and Goose don't get the built-in tools or native image input — they see attachment paths and can read them via their own file access.
 - The Room's project folder is served unauthenticated under `/preview-static/<roomId>/` so the live preview works in an iframe — except `uploads/` (chat attachments), which is members-only. SVGs served there can't run scripts.
 - @mentions (and agent handoffs) only reach agents the sender can see: agents created in a Task Room they're in, or attached to one of their Rooms. A Loop's handoffs stay within its Room.
-- Slack/Linear tools are simplified direct API calls, not real MCP servers.
 - Automated tests (`npm test`) cover the server's security fixes and the agent workflow against a mock Claude API, each on a throwaway data folder; the web UI and desktop shell are still verified by hand.
