@@ -133,6 +133,19 @@ describe("auth enabled (multi-user)", () => {
     assert.equal((await s.req("/api/connections/anthropic", { method: "PUT", as: "own", body })).status, 200);
   });
 
+  test("/api/state only carries messages from task rooms the caller can see", async () => {
+    for (const tr of ["tr-a", "tr-b"]) {
+      s.db
+        .prepare("INSERT INTO messages (id, task_room_id, author_type, author_id, content, created_at) VALUES (?,?,?,?,?,?)")
+        .run(`scope-${tr}`, tr, "member", "m-owner", `hello ${tr}`, "2026-01-01T00:00:00Z");
+    }
+    const ids = async (as: string) =>
+      ((await (await s.req("/api/state", { as })).json()).messages as { id: string }[]).map((m) => m.id).filter((id) => id.startsWith("scope-"));
+    assert.deepEqual(await ids("in"), ["scope-tr-a"]);
+    assert.deepEqual(await ids("out"), ["scope-tr-b"]);
+    assert.deepEqual((await ids("own")).sort(), ["scope-tr-a", "scope-tr-b"]);
+  });
+
   test("agents (and @mentions, DMs) are invisible outside their rooms", async () => {
     const state = await (await s.req("/api/state", { as: "out" })).json();
     assert.equal(state.agents.some((a: { id: string }) => a.id === agentId), false);
