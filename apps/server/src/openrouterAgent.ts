@@ -5,6 +5,10 @@ import type { HistoryMessage } from "./claudeAgent.js";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const MAX_TOOL_ITERATIONS = 25;
+// Without an explicit cap OpenRouter reserves the model's full max output
+// against the account's credit up front, so a modestly funded key gets 402s
+// even for a one-line reply.
+const MAX_OUTPUT_TOKENS = 8192;
 
 type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 type OpenRouterMessage = {
@@ -56,6 +60,7 @@ export async function runOpenRouterTurn(
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: agent.model,
+        max_tokens: MAX_OUTPUT_TOKENS,
         messages,
         ...(openrouterTools ? { tools: openrouterTools } : {}),
       }),

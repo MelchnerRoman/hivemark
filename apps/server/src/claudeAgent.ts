@@ -235,6 +235,9 @@ function friendlyError(err: unknown): string {
   if (lower.includes("pdf") && (lower.includes("page") || lower.includes("invalid"))) {
     return `One of the attached PDFs can't be read by Claude (over the page limit, encrypted, or corrupt). Split it or attach only the pages that matter. (${raw})`;
   }
+  if (lower.includes("openrouter 402") || lower.includes("requires more credits")) {
+    return "My OpenRouter account doesn't have enough credit for this request. Top up the OpenRouter balance (or raise the key's limit), or switch me to another runtime.";
+  }
   if (lower.includes("e2big")) {
     return "This conversation is too long to hand to the agent's command-line tool. Start a new Task Room for the next phase.";
   }
