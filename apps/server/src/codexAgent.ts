@@ -50,18 +50,32 @@ function modelValues(session: acp.NewSessionResponse): string[] {
 
 /** Models the Codex CLI offers for the account it's signed in with. Opening a
  * session costs nothing (no prompt is sent), but takes a few seconds — cached. */
-let codexModels: { at: number; models: string[] } | null = null;
-export async function listCodexModels(): Promise<string[]> {
+// The in-flight promise is cached too, so concurrent cold requests share one
+// codex-acp process; a failure is dropped from the cache so the next call retries.
+let codexModels: { at: number; models: Promise<string[]> } | null = null;
+const CODEX_MODELS_TIMEOUT_MS = Number(process.env.HIVEMARK_CODEX_MODELS_TIMEOUT_MS) || 30_000;
+export function listCodexModels(): Promise<string[]> {
   if (codexModels && Date.now() - codexModels.at < 10 * 60_000) return codexModels.models;
-  const { child, connection } = startCodex({
-    requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
-    sessionUpdate: async () => {},
-  });
+  const models = fetchCodexModels();
+  const entry = (codexModels = { at: Date.now(), models });
+  models.catch(() => codexModels === entry && (codexModels = null));
+  return models;
+}
+
+async function fetchCodexModels(): Promise<string[]> {
+  // A hung codex-acp (npx download stalled, login prompt, ...) would otherwise
+  // hold the request — and the child process — open forever. Aborting kills
+  // the child, which closes the ACP connection and rejects the pending call.
+  const { child, connection } = startCodex(
+    {
+      requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+      sessionUpdate: async () => {},
+    },
+    AbortSignal.timeout(CODEX_MODELS_TIMEOUT_MS)
+  );
   try {
     await connection.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
-    const models = modelValues(await connection.newSession({ cwd: tmpdir(), mcpServers: [] }));
-    codexModels = { at: Date.now(), models };
-    return models;
+    return modelValues(await connection.newSession({ cwd: tmpdir(), mcpServers: [] }));
   } finally {
     child.kill();
   }
