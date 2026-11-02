@@ -35,7 +35,7 @@ const HISTORY_CHAR_BUDGET = 400_000;
 // handoffs only reach agents that member can see. Absent for a Loop.
 type Turn =
   | { kind: "task_room"; taskRoomId: string; depth?: number; note?: string; originMemberId?: string }
-  | { kind: "dm"; agentId: string; note?: string };
+  | { kind: "dm"; agentId: string; memberId: string; note?: string };
 
 /** `content` is self-contained text (attachments named inline) for the
  * text-only runtimes; the Anthropic path also turns `attachments` into real
@@ -104,7 +104,7 @@ function withAttachmentNote(content: string, attachments: string[]): string {
 function buildHistoryMessages(agent: Agent, turn: Turn): HistoryMessage[] {
   const history: HistoryMessage[] = [];
   if (turn.kind === "dm") {
-    for (const m of repo.getDirectMessagesForAgent(agent.id)) {
+    for (const m of repo.getDirectMessagesForAgent(agent.id, turn.memberId)) {
       history.push({ role: m.authorType === "agent" ? "assistant" : "user", content: m.content });
     }
   } else {
@@ -280,7 +280,7 @@ const agentsInFlight = new Map<string, AbortController>();
 const queuedTurns = new Map<string, Turn[]>();
 
 function conversationKey(turn: Turn) {
-  return turn.kind === "dm" ? "dm" : turn.taskRoomId;
+  return turn.kind === "dm" ? `dm:${turn.memberId}` : turn.taskRoomId;
 }
 
 /** Aborts the agent's in-flight turn, if any (cancels the API request / kills
@@ -339,7 +339,9 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
   notifySync();
 
   const reply = (text: string, attachments: string[] = []) => {
-    if (turn.kind === "dm") return repo.addDirectMessage(agentId, "agent", withAttachmentNote(text, attachments));
+    if (turn.kind === "dm") {
+      return repo.addDirectMessage(agentId, "agent", withAttachmentNote(text, attachments), null, turn.memberId);
+    }
     const mentioned = findMentionedAgents(text).filter((a) => a.id !== agentId && canHandOffTo(turn, a));
     repo.addMessage(turn.taskRoomId, "agent", agentId, text, mentioned.map((a) => a.id), attachments);
     const depth = (turn.depth ?? 0) + 1;
@@ -404,6 +406,9 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
       `You are ${agent.name}, an AI agent working on a team in a chat app called Hivemark — alongside humans and other agents, like staff at an agency.`,
       agent.instructions ? `Your instructions: ${agent.instructions}` : null,
       turn.kind === "task_room" ? buildRoomContext(turn.taskRoomId) : null,
+      turn.kind === "dm"
+        ? `This is a private 1:1 chat with ${repo.getMember(turn.memberId)?.name ?? "a teammate"}; only they see it.`
+        : null,
       turn.kind === "task_room" ? buildTeammates(agent, turn) : null,
       hasFileTools
         ? `Deliverables (reports, research, copy, code, designs, data) belong in files in the Room's shared project folder, not pasted into chat — write them with your file tools${workspace ? ", then attach_file the key ones" : ""}.`

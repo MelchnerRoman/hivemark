@@ -98,6 +98,9 @@ export type DirectMessage = {
   /** Which member sent this, for member-authored rows. Null for agent-authored
    * rows, and for rows written before this field existed. */
   authorId: string | null;
+  /** Whose private 1:1 thread with the agent this belongs to — DMs are
+   * per member, visible only to that member. */
+  memberId: string | null;
   content: string;
   createdAt: string;
   editedAt: string | null;

@@ -92,6 +92,8 @@ export type DirectMessage = {
   id: string;
   agentId: string;
   authorType: "member" | "agent";
+  /** Whose private 1:1 thread this is (the server only sends your own). */
+  memberId: string | null;
   content: string;
   createdAt: string;
   editedAt: string | null;

@@ -317,6 +317,12 @@ db.prepare("INSERT OR IGNORE INTO mcp_tools (id, name, description, icon) VALUES
   if (!dmCols.some((c) => c.name === "author_id")) {
     db.exec("ALTER TABLE direct_messages ADD COLUMN author_id TEXT");
   }
+  // Private DMs: each row belongs to one member's thread (backfilled below,
+  // after the demo seed).
+  if (!dmCols.some((c) => c.name === "member_id")) {
+    db.exec("ALTER TABLE direct_messages ADD COLUMN member_id TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_direct_messages_thread ON direct_messages(agent_id, member_id, created_at)");
 }
 
 // Expired sessions are otherwise harmless (rejected at lookup) — a boot-time
@@ -499,6 +505,18 @@ seedDemoWorkspace();
 db.prepare("UPDATE direct_messages SET author_id = ? WHERE author_type = 'member' AND author_id IS NULL").run(
   CURRENT_MEMBER_ID
 );
+// DMs from before they were private: a member's own messages are their
+// thread; an agent reply belongs to whoever wrote the message it answered
+// (the latest member message before it to that agent).
+db.exec(`
+UPDATE direct_messages SET member_id = author_id WHERE member_id IS NULL AND author_type = 'member';
+UPDATE direct_messages SET member_id = (
+  SELECT d2.author_id FROM direct_messages d2
+  WHERE d2.agent_id = direct_messages.agent_id AND d2.author_type = 'member' AND d2.created_at <= direct_messages.created_at
+  ORDER BY d2.created_at DESC LIMIT 1
+) WHERE member_id IS NULL AND author_type = 'agent';
+`);
+db.prepare("UPDATE direct_messages SET member_id = ? WHERE member_id IS NULL").run(CURRENT_MEMBER_ID);
 
 /** Who every request acts as when auth is disabled: the pre-auth local member
  * — or, for a workspace that was first set up with OAuth (so has no
@@ -590,6 +608,7 @@ function rowToDm(r: any): DirectMessage {
     agentId: r.agent_id,
     authorType: r.author_type,
     authorId: r.author_id ?? null,
+    memberId: r.member_id ?? null,
     content: r.content,
     createdAt: r.created_at,
     editedAt: r.edited_at ?? null,
@@ -727,7 +746,7 @@ function connectionStatus(key: ConnectionKey): ConnectionStatus {
 // every scheduler tick (active loops) — cache just those.
 const stmtMessagesForTaskRoom = db.prepare("SELECT * FROM messages WHERE task_room_id = ? ORDER BY created_at ASC");
 const stmtDirectMessagesForAgent = db.prepare(
-  "SELECT * FROM direct_messages WHERE agent_id = ? ORDER BY created_at ASC"
+  "SELECT * FROM direct_messages WHERE agent_id = ? AND member_id = ? ORDER BY created_at ASC"
 );
 const stmtAllAgents = db.prepare("SELECT * FROM agents");
 const stmtAllMembers = db.prepare("SELECT * FROM members");
@@ -783,13 +802,14 @@ export const repo = {
    * everything (unscoped), any other member only sees rooms/task rooms
    * they're actually listed on and everything derived from those (messages,
    * agents, workflows, loops, todos). members/mcpTools/agentTeams/runtimes/
-   * defaults/behaviorSettings/connections/directMessages stay unscoped (see
-   * plan doc — DMs specifically have no per-member field to scope by).
+   * defaults/behaviorSettings/connections stay unscoped. DMs are private to
+   * their member for everyone, the owner included.
    * Internal callers (claudeAgent.ts, scheduler.ts) keep using the plain
    * unscoped getState() above — they need the full picture regardless of
    * any human viewer. */
   getScopedState(callerId: string): AppState {
-    const full = repo.getState();
+    const all = repo.getState();
+    const full = { ...all, directMessages: all.directMessages.filter((dm) => dm.memberId === callerId) };
     if (repo.getMemberRole(callerId) === "owner") return full;
 
     const visibleRoomIds = new Set(full.rooms.filter((r) => r.memberIds.includes(callerId)).map((r) => r.id));
@@ -954,18 +974,20 @@ export const repo = {
     agentId: string,
     authorType: "member" | "agent",
     content: string,
-    authorId: string | null = null
+    authorId: string | null,
+    memberId: string
   ): DirectMessage {
     const dmId = id("dm");
     const createdAt = nowIso();
     db.prepare(
-      "INSERT INTO direct_messages (id, agent_id, author_type, author_id, content, created_at) VALUES (?,?,?,?,?,?)"
-    ).run(dmId, agentId, authorType, authorId, content, createdAt);
+      "INSERT INTO direct_messages (id, agent_id, author_type, author_id, member_id, content, created_at) VALUES (?,?,?,?,?,?,?)"
+    ).run(dmId, agentId, authorType, authorId, memberId, content, createdAt);
     return rowToDm(db.prepare("SELECT * FROM direct_messages WHERE id = ?").get(dmId));
   },
 
-  getDirectMessagesForAgent(agentId: string): DirectMessage[] {
-    return (stmtDirectMessagesForAgent.all(agentId) as any[]).map(rowToDm);
+  /** One member's private thread with an agent. */
+  getDirectMessagesForAgent(agentId: string, memberId: string): DirectMessage[] {
+    return (stmtDirectMessagesForAgent.all(agentId, memberId) as any[]).map(rowToDm);
   },
 
   getDirectMessage(dmId: string): DirectMessage | null {

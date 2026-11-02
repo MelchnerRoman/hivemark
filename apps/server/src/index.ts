@@ -619,17 +619,20 @@ app.post(
     const agent = repo.getAgent(agentId);
     // 404 (not 403) for an agent you can't see — same as it not existing for you.
     if (!agent || !repo.canSeeAgent(req.memberId, agent)) return res.status(404).json({ error: "agent not found" });
-    const message = repo.addDirectMessage(agentId, "member", req.body.content, req.memberId);
+    const message = repo.addDirectMessage(agentId, "member", req.body.content, req.memberId, req.memberId);
     bus.emit("sync");
     res.json(message);
-    runAgentTurn(agentId, { kind: "dm", agentId }).catch((err) => console.error("agent turn failed", err));
+    runAgentTurn(agentId, { kind: "dm", agentId, memberId: req.memberId }).catch((err) =>
+      console.error("agent turn failed", err)
+    );
   })
 );
 app.patch(
   "/api/direct-messages/:dmId",
   handle((req, res) => {
     const dm = repo.getDirectMessage(req.params.dmId);
-    if (!dm) return res.status(404).json({ error: "message not found" });
+    // Someone else's private thread: indistinguishable from not existing.
+    if (!dm || dm.memberId !== req.memberId) return res.status(404).json({ error: "message not found" });
     if (dm.authorType !== "member" || dm.authorId !== req.memberId) {
       return res.status(403).json({ error: "You can only edit your own messages." });
     }
@@ -642,10 +645,8 @@ app.delete(
   "/api/direct-messages/:dmId",
   handle((req, res) => {
     const dm = repo.getDirectMessage(req.params.dmId);
-    if (!dm) return res.status(404).json({ error: "message not found" });
-    if (dm.authorType === "member" && dm.authorId !== req.memberId) {
-      return res.status(403).json({ error: "You can only delete your own messages." });
-    }
+    // Your own thread only (your messages and the agent's replies to you).
+    if (!dm || dm.memberId !== req.memberId) return res.status(404).json({ error: "message not found" });
     repo.deleteDirectMessage(req.params.dmId);
     bus.emit("sync");
     res.json({ ok: true });

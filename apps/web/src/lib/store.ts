@@ -362,6 +362,7 @@ export const useStore = create<Store>((set, get) => ({
       id: tempId("dm"),
       agentId,
       authorType: "member",
+      memberId: get().currentMemberId,
       content,
       createdAt: new Date().toISOString(),
       editedAt: null,

@@ -1,7 +1,7 @@
 // Regression tests for security fixes. Run: npm test --workspace=server
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import { addMember, PNG, rawGet, startServer, type TestServer } from "./helpers.ts";
+import { addMember, PNG, rawGet, startMockAnthropic, startServer, waitFor, type MockAnthropic, type TestServer } from "./helpers.ts";
 
 describe("auth disabled (local mode)", () => {
   let s: TestServer;
@@ -81,9 +81,12 @@ describe("auth disabled (local mode)", () => {
 
 describe("auth enabled (multi-user)", () => {
   let s: TestServer;
+  let mock: MockAnthropic;
   let agentId: string;
   before(async () => {
+    mock = await startMockAnthropic(() => ({ blocks: [{ text: "ok" }], stop: "end_turn" }));
     s = await startServer({
+      ANTHROPIC_BASE_URL: mock.url,
       GOOGLE_CLIENT_ID: "cid",
       GOOGLE_CLIENT_SECRET: "secret",
       PUBLIC_URL: "http://127.0.0.1:1",
@@ -108,7 +111,10 @@ describe("auth enabled (multi-user)", () => {
     });
     agentId = (await res.json()).id;
   });
-  after(() => s.stop());
+  after(async () => {
+    await s.stop();
+    mock.close();
+  });
 
   test("a non-member can't add themselves to a room", async () => {
     const res = await s.req("/api/rooms/room-a/members", { method: "POST", as: "out", body: JSON.stringify({ memberId: "m-out" }) });
@@ -142,6 +148,27 @@ describe("auth enabled (multi-user)", () => {
     assert.equal((await s.req(`/api/agent-teams/${team.id}`, { method: "DELETE", as: "in" })).status, 200);
     const other = await create("in");
     assert.equal((await s.req(`/api/agent-teams/${other.id}`, { method: "DELETE", as: "own" })).status, 200);
+  });
+
+  test("DMs are private per member — in the UI, the API, and the agent's memory", async () => {
+    // agentId lives in tr-a, which both the owner and m-in can see
+    const dm = (as: string, content: string) =>
+      s.req(`/api/agents/${agentId}/dm`, { method: "POST", as, body: JSON.stringify({ content }) }).then((r) => r.json());
+    const mine = await dm("in", "secret plan from m-in");
+    await waitFor(() => mock.requests.some((r) => JSON.stringify(r.messages).includes("secret plan")));
+    await dm("own", "hello from the owner");
+    await waitFor(() => mock.requests.some((r) => JSON.stringify(r.messages).includes("hello from the owner")));
+
+    const ownerReq = mock.requests.find((r) => JSON.stringify(r.messages).includes("hello from the owner"));
+    assert.ok(!JSON.stringify(ownerReq.messages).includes("secret plan"), "agent doesn't see other members' threads");
+
+    const ownerState = await (await s.req("/api/state", { as: "own" })).json();
+    assert.ok(!JSON.stringify(ownerState.directMessages).includes("secret plan"), "not even the owner sees it");
+    const inState = await (await s.req("/api/state", { as: "in" })).json();
+    assert.ok(JSON.stringify(inState.directMessages).includes("secret plan"));
+
+    assert.equal((await s.req(`/api/direct-messages/${mine.id}`, { method: "DELETE", as: "own" })).status, 404);
+    assert.equal((await s.req(`/api/direct-messages/${mine.id}`, { method: "PATCH", as: "own", body: JSON.stringify({ content: "x" }) })).status, 404);
   });
 
   test("login CSRF: OAuth callback needs the state cookie of this browser", async () => {
