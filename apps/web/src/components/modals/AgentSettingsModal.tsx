@@ -198,6 +198,7 @@ function AgentSettingsBody() {
               Default instructions template
             </label>
             <textarea
+              aria-label="Default instructions template"
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
               placeholder="e.g. Always summarize findings back to the task room chat before finishing."
@@ -359,6 +360,7 @@ function ConnectionsSection() {
             <p className="mt-1.5 text-xs text-foreground-muted">{CONNECTION_HELP[conn.key]}</p>
             <div className="mt-2 flex gap-2">
               <input
+                aria-label={`${conn.label} key`}
                 type="password"
                 value={drafts[conn.key] ?? ""}
                 onChange={(e) => setDrafts((d) => ({ ...d, [conn.key]: e.target.value }))}

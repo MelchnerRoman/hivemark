@@ -81,6 +81,7 @@ function CreateAgentForm({
             <p className="text-xs text-foreground-muted">Create a Task Room first, then come back to add an agent.</p>
           ) : (
             <select
+              aria-label="Task Room"
               value={taskRoomId}
               onChange={(e) => setTaskRoomId(e.target.value)}
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
@@ -117,6 +118,7 @@ function CreateAgentForm({
       <div>
         <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Agent name</label>
         <input
+          aria-label="Agent name"
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -127,6 +129,7 @@ function CreateAgentForm({
       <div>
         <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Instructions</label>
         <textarea
+          aria-label="Instructions"
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
           placeholder="What should this agent do within this task room?"
@@ -143,6 +146,8 @@ function CreateAgentForm({
             <button
               type="button"
               key={opt}
+              aria-label={`Icon ${opt}`}
+              aria-pressed={emoji === opt}
               onClick={() => setEmoji(opt)}
               className={`flex h-8 w-8 items-center justify-center rounded-full border text-base ${
                 emoji === opt ? "border-brand bg-brand-soft" : "border-border hover:bg-surface-raised"
@@ -160,6 +165,7 @@ function CreateAgentForm({
             <button
               type="button"
               key={c}
+              aria-pressed={color === c}
               onClick={() => setColor(c)}
               className={`h-7 w-7 rounded-full border-2 ${color === c ? "border-foreground" : "border-transparent"}`}
               style={{ backgroundColor: c }}

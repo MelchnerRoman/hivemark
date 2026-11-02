@@ -73,6 +73,7 @@ function SearchBody({ onClose }: { onClose: () => void }) {
   return (
     <div className="space-y-4">
       <input
+        aria-label="Search"
         autoFocus
         value={query}
         onChange={(e) => setQuery(e.target.value)}

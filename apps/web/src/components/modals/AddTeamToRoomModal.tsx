@@ -45,6 +45,7 @@ function AddTeamToRoomForm({ team, onClose }: { team: AgentTeam; onClose: () => 
       <div>
         <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Task Room</label>
         <select
+          aria-label="Task Room"
           value={taskRoomId}
           onChange={(e) => setTaskRoomId(e.target.value)}
           className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"

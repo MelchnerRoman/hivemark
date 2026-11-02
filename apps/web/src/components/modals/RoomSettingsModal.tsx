@@ -79,6 +79,7 @@ export function RoomSettingsModal({
             <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Add member</label>
             <div className="flex gap-2">
               <select
+                aria-label="Add member"
                 value={addingId}
                 onChange={(e) => setAddingId(e.target.value)}
                 className="flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-brand"
@@ -135,6 +136,7 @@ export function RoomSettingsModal({
           {availableAgents.length > 0 ? (
             <div className="flex gap-2">
               <select
+                aria-label="Add agent"
                 value={addingAgentId}
                 onChange={(e) => setAddingAgentId(e.target.value)}
                 className="flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-brand"
@@ -168,6 +170,7 @@ export function RoomSettingsModal({
           {agentTeams.length > 0 && (
             <div className="mt-3 flex gap-2">
               <select
+                aria-label="Add team"
                 value={addingTeamId}
                 onChange={(e) => setAddingTeamId(e.target.value)}
                 className="flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-brand"

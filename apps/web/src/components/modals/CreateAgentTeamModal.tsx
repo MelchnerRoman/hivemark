@@ -42,6 +42,7 @@ function CreateAgentTeamForm({ onClose }: { onClose: () => void }) {
       <div>
         <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Team name</label>
         <input
+          aria-label="Team name"
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -52,6 +53,7 @@ function CreateAgentTeamForm({ onClose }: { onClose: () => void }) {
       <div>
         <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Mode</label>
         <select
+          aria-label="Team mode"
           value={mode}
           onChange={(e) => setMode(e.target.value as AgentTeamMode)}
           className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"

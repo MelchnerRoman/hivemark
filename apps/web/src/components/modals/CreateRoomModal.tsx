@@ -27,6 +27,7 @@ export function CreateRoomModal({ open, onClose }: { open: boolean; onClose: () 
         <div>
           <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Room name</label>
           <input
+            aria-label="Room name"
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -41,6 +42,8 @@ export function CreateRoomModal({ open, onClose }: { open: boolean; onClose: () 
               <button
                 type="button"
                 key={opt}
+                aria-label={`Icon ${opt}`}
+                aria-pressed={emoji === opt}
                 onClick={() => setEmoji(opt)}
                 className={`flex h-8 w-8 items-center justify-center rounded-lg border text-base ${
                   emoji === opt ? "border-brand bg-brand-soft" : "border-border hover:bg-surface-raised"

@@ -33,6 +33,7 @@ export function WorkflowsPanel({ taskRoomId }: { taskRoomId: string }) {
     <div className="h-full overflow-y-auto px-6 py-4">
       <form onSubmit={handleCreate} className="mb-5 flex gap-2">
         <input
+          aria-label="New workflow name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="New workflow name…"
@@ -106,6 +107,7 @@ export function WorkflowsPanel({ taskRoomId }: { taskRoomId: string }) {
                 className="mt-2 flex gap-2"
               >
                 <input
+                  aria-label="Add step"
                   value={stepDraft[w.id] ?? ""}
                   onChange={(e) => setStepDraft((s) => ({ ...s, [w.id]: e.target.value }))}
                   placeholder="Add step…"
