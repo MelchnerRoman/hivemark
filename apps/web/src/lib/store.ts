@@ -74,7 +74,7 @@ function notifyNewAgentMessages(
 }
 
 const DEFAULT_AGENT_DEFAULTS: AgentDefaults = {
-  model: "Claude Sonnet 5.5",
+  model: "", // ModelInput picks the provider's newest Sonnet
   runtimeId: "runtime-hivemark",
   instructions: "",
 };

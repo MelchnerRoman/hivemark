@@ -8,6 +8,7 @@ import { findMentionedAgents, getTurnBridge, runAgentTurn, stopAgentTurn } from 
 import { startScheduler } from "./scheduler.js";
 import { getClaudeCodeAuthStatus, triggerClaudeCodeLogin } from "./claudeCodeAuth.js";
 import { isCliAvailable } from "./cliCheck.js";
+import { listAnthropicModels, listOpenRouterModels } from "./modelIds.js";
 import { MCP_TOOL_SETUP } from "./mcp/setup.js";
 import { closeAgentSession, closeAllAgentSessions, startIdleSessionSweep } from "./mcp/manager.js";
 import {
@@ -945,6 +946,12 @@ app.get(
   "/api/runtimes/claude-code/status",
   handle(async (_req, res) => {
     res.json(await getClaudeCodeAuthStatus());
+  })
+);
+app.get(
+  "/api/models",
+  handle(async (req, res) => {
+    res.json({ models: req.query.provider === "openrouter" ? await listOpenRouterModels() : await listAnthropicModels() });
   })
 );
 app.post(

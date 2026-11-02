@@ -383,7 +383,7 @@ function seedCatalog() {
   insertRuntime.run("runtime-openrouter", "OpenRouter", "🌐", "ready", "Calls any model OpenRouter hosts (not just Claude) — type the model slug directly, e.g. openai/gpt-4o.", null, "https://openrouter.ai/keys");
 
   db.prepare("INSERT INTO agent_defaults (id, model, runtime_id, instructions) VALUES (1, ?, ?, '')").run(
-    "Claude Sonnet 5",
+    "", // empty = the provider's newest Sonnet (see web ModelInput / modelIds.ts)
     "runtime-hivemark"
   );
   db.prepare(
@@ -517,6 +517,8 @@ UPDATE direct_messages SET member_id = (
 ) WHERE member_id IS NULL AND author_type = 'agent';
 `);
 db.prepare("UPDATE direct_messages SET member_id = ? WHERE member_id IS NULL").run(CURRENT_MEMBER_ID);
+// The old seed pinned the default model; follow the provider's newest instead.
+db.prepare("UPDATE agent_defaults SET model = '' WHERE model = 'Claude Sonnet 5'").run();
 
 /** Who every request acts as when auth is disabled: the pre-auth local member
  * — or, for a workspace that was first set up with OAuth (so has no

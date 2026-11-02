@@ -74,6 +74,12 @@ export function addMember(server: TestServer, id: string, role: "owner" | "membe
   server.db.prepare("INSERT OR REPLACE INTO sessions VALUES (?,?,?,?)").run(token, id, "2026-01-01", "2099-01-01");
 }
 
+/** What the mock's models API lists, newest first. */
+export const MOCK_MODELS = [
+  { type: "model", id: "claude-opus-9", display_name: "Claude Opus 9", created_at: "2027-01-01T00:00:00Z" },
+  { type: "model", id: "claude-sonnet-9-1", display_name: "Claude Sonnet 9.1", created_at: "2027-01-01T00:00:00Z" },
+];
+
 type MockBlock = { text: string } | { tool: string; input: Record<string, unknown> };
 export type MockAnthropic = {
   url: string;
@@ -92,6 +98,11 @@ export async function startMockAnthropic(
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
+      if (req.method === "GET" && req.url?.startsWith("/v1/models")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ data: MOCK_MODELS, has_more: false, first_id: null, last_id: null }));
+        return;
+      }
       const body = JSON.parse(raw);
       requests.push(body);
       const { blocks, stop } = script(body);

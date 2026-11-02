@@ -2,7 +2,7 @@
 // Run: npm test --workspace=server
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { PNG, startMockAnthropic, startServer, waitFor, type MockAnthropic, type TestServer } from "./helpers.ts";
+import { MOCK_MODELS, PNG, startMockAnthropic, startServer, waitFor, type MockAnthropic, type TestServer } from "./helpers.ts";
 
 let s: TestServer;
 let mock: MockAnthropic;
@@ -91,4 +91,9 @@ test("Run when the agent's own reply is the latest message doesn't send an assis
   const req = mock.requests.at(-1);
   assert.equal(req.messages[0].role, "user");
   assert.equal(req.messages.at(-1).role, "user");
+});
+
+test("the model list comes from the provider", async () => {
+  const { models } = await (await s.req("/api/models?provider=anthropic")).json();
+  assert.deepEqual(models, MOCK_MODELS.map((m) => m.display_name));
 });
