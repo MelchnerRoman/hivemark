@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "trap 'kill 0' EXIT; npm run dev --workspace=server & npm run dev --workspace=web & wait",
     "dev:web": "npm run dev --workspace=web",
+    "test": "npm test --workspace=server",
     "dev:desktop": "npm run dev --workspace=desktop",
     "build:web": "npm run build --workspace=web",
     "build:desktop": "npm run build:web && npm run build:electron --workspace=desktop"

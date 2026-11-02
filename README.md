@@ -125,4 +125,4 @@ electron-builder is also pinned to `^25.x`, not `^26.x` — `app-builder-lib@26`
 - The Room's project folder is served unauthenticated under `/preview-static/<roomId>/` so the live preview works in an iframe — except `uploads/` (chat attachments), which is members-only. SVGs served there can't run scripts.
 - @mentions (and agent handoffs) only reach agents the sender can see: agents created in a Task Room they're in, or attached to one of their Rooms. A Loop's handoffs stay within its Room.
 - Slack/Linear tools are simplified direct API calls, not real MCP servers.
-- No automated test suite — everything's been verified by hand (browser automation + curl) rather than a CI-run suite.
+- Automated tests (`npm test`) cover the server's security fixes and the agent workflow against a mock Claude API, each on a throwaway data folder; the web UI and desktop shell are still verified by hand.
