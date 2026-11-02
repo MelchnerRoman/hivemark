@@ -9,6 +9,7 @@ import { fetchRoomFileBlob } from "@/lib/api";
  * document there would run script on the app's own origin. */
 export function AuthImage({ roomId, path, className }: { roomId: string; path: string; className?: string }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let objectUrl: string | null = null;
@@ -19,13 +20,17 @@ export function AuthImage({ roomId, path, className }: { roomId: string; path: s
         objectUrl = URL.createObjectURL(blob);
         setSrc(objectUrl);
       })
-      .catch(() => {});
+      .catch(() => !cancelled && setFailed(true));
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [roomId, path]);
 
+  if (failed) {
+    // Deleted file, lost access, backend down: say so instead of pulsing forever.
+    return <div className={`flex items-center justify-center bg-surface-raised p-3 text-xs text-foreground-muted ${className ?? ""}`}>Couldn&apos;t load {path.split("/").pop()}</div>;
+  }
   if (!src) return <div className={`animate-pulse bg-surface-raised ${className ?? ""}`} style={{ minHeight: 64, minWidth: 96 }} />;
   // eslint-disable-next-line @next/next/no-img-element -- static export, no image optimizer
   return <img src={src} alt={path} className={className} />;
