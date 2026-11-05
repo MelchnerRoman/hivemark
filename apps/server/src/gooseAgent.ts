@@ -16,7 +16,8 @@ export function runGooseTurn(
   agent: Agent,
   system: string,
   history: HistoryMessage[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  traceTool: (name: string, input: unknown) => void = () => {}
 ): Promise<string> {
   const apiKey = repo.getConnectionValue("anthropic");
   if (!apiKey) {
@@ -45,8 +46,10 @@ export function runGooseTurn(
         // Prompt over stdin, not argv (OS argument-size limit, see claudeCodeAgent.ts).
         "-i",
         "-",
+        // NDJSON of goose's own messages (text, toolRequest, error blocks) —
+        // shape checked against goose 1.57 driven by a local mock provider.
         "--output-format",
-        "text",
+        "stream-json",
         "--quiet",
       ],
       { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ANTHROPIC_API_KEY: apiKey }, signal }
@@ -68,20 +71,42 @@ export function runGooseTurn(
     });
 
     child.on("close", (code) => {
-      const text = stdout.trim();
       if (code !== 0) {
         reject(new Error(`Goose exited with code ${code}: ${stderr.trim() || "no error output"}`));
         return;
       }
-      // ponytail: goose exits 0 even on a provider/auth failure and just prints
-      // "Ran into this error: ..." to stdout — verified directly against the real
-      // CLI, not a guess. Treat that prefix as a failure so agent status stays
-      // accurate; upgrade to a real machine-readable error signal if goose adds one.
-      if (text.startsWith("Ran into this error:")) {
-        reject(new Error(text));
+      // Text of every assistant message, as text mode printed it; a message
+      // can arrive in several chunks under one id.
+      let text = "";
+      let lastId: string | undefined;
+      let error: string | null = null;
+      for (const line of stdout.split("\n")) {
+        let ev;
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (ev.type === "error") error = String(ev.error);
+        const msg = ev.type === "message" ? ev.message : null;
+        if (msg?.role !== "assistant" || !Array.isArray(msg.content)) continue;
+        for (const b of msg.content) {
+          if (b.type === "text") {
+            if (text && msg.id !== lastId) text += "\n\n";
+            text += b.text;
+            lastId = msg.id;
+          } else if (b.type === "toolRequest" && b.toolCall?.value) traceTool(b.toolCall.value.name, b.toolCall.value.arguments);
+          else if (b.type === "error") error ??= String(b.message);
+        }
+      }
+      // goose has exited 0 on a provider/auth failure before (then printing
+      // "Ran into this error: ..." in text mode) — an error event or block
+      // fails the turn either way, so agent status stays accurate.
+      if (error) {
+        reject(new Error(error));
         return;
       }
-      resolve(text || "(no response)");
+      resolve(text.trim() || "(no response)");
     });
   });
 }

@@ -87,7 +87,8 @@ export async function runCodexTurn(
   history: HistoryMessage[],
   roomId: string | null,
   signal: AbortSignal,
-  dmMemberId: string | null = null
+  dmMemberId: string | null = null,
+  traceTool: (name: string, input: unknown) => void = () => {}
 ): Promise<string> {
   const bashAccess = hasBashAccess(agent);
   const workspaceDir = bashAccess
@@ -111,6 +112,8 @@ export async function runCodexTurn(
         if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
           textChunks.push(update.content.text);
         }
+        // ACP has no tool name, only a human title ("Run ls", "Read foo.ts").
+        if (update.sessionUpdate === "tool_call") traceTool(update.title, update.rawInput);
       },
     },
     signal

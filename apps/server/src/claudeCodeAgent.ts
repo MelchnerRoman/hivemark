@@ -56,6 +56,13 @@ function mcpServersFor(agent: Agent, roomId: string | null, turnToken: string | 
   return servers;
 }
 
+/** Claude Code's `mcp__<server>__<tool>` as the Hivemark runtime names it:
+ * our own workspace tools bare, catalog tools as `<toolId>__<tool>`. */
+function traceName(name: string): string {
+  const m = /^mcp__(.+?)__(.+)$/.exec(name);
+  return !m ? name : m[1] === "hivemark" ? m[2] : `${m[1]}__${m[2]}`;
+}
+
 /**
  * Runs a turn by spawning the actual Claude Code CLI (`claude -p`) instead of
  * calling the Anthropic API ourselves. Auth is whatever's already configured
@@ -84,7 +91,8 @@ export function runClaudeCodeTurn(
   roomId: string | null,
   signal: AbortSignal,
   turnToken: string | null,
-  dmMemberId: string | null = null
+  dmMemberId: string | null = null,
+  traceTool: (name: string, input: unknown) => void = () => {}
 ): Promise<string> {
   const transcript = history.map((m) => `${m.role === "assistant" ? "You" : "Message"}: ${m.content}`).join("\n\n");
   const prompt = `${transcript}\n\nRespond with your next message only, no preamble.`;
@@ -127,8 +135,11 @@ export function runClaudeCodeTurn(
         system,
         "--model",
         resolveModelId(agent.model),
+        // stream-json (needs --verbose with -p) also reports each tool call,
+        // for the reply's tool trace; the final text is in its "result" event.
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
         "--tools",
         tools.join(","),
         ...(workspaceDir ? ["--add-dir", workspaceDir, "--permission-mode", "acceptEdits"] : []),
@@ -163,16 +174,29 @@ export function runClaudeCodeTurn(
         reject(new Error(`Claude Code exited with code ${code}: ${stderr.trim() || "no error output"}`));
         return;
       }
-      try {
-        const parsed = JSON.parse(stdout);
-        if (parsed.is_error) {
-          reject(new Error(parsed.result || "Claude Code reported an error"));
-          return;
+      // NDJSON: assistant events carry the tool_use blocks, the last line is
+      // the "result" event (same fields --output-format json used to print).
+      let parsed: { is_error?: boolean; result?: string } | null = null;
+      for (const line of stdout.split("\n")) {
+        let ev;
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
         }
-        resolve(String(parsed.result ?? "").trim() || "(no response)");
-      } catch {
-        reject(new Error(`Couldn't parse Claude Code output: ${stdout.slice(0, 300)}`));
+        if (ev.type === "result") parsed = ev;
+        if (ev.type !== "assistant" || !Array.isArray(ev.message?.content)) continue;
+        for (const b of ev.message.content) if (b.type === "tool_use") traceTool(traceName(b.name), b.input);
       }
+      if (!parsed) {
+        reject(new Error(`Couldn't parse Claude Code output: ${stdout.slice(0, 300)}`));
+        return;
+      }
+      if (parsed.is_error) {
+        reject(new Error(parsed.result || "Claude Code reported an error"));
+        return;
+      }
+      resolve(String(parsed.result ?? "").trim() || "(no response)");
     });
   });
 }
