@@ -56,6 +56,8 @@ export type BackendState = {
   messages: ChatMessage[];
   directMessages: DirectMessage[];
   agents: Agent[];
+  /** Agents you can't see that wrote in your rooms: just enough to render them. */
+  messageAuthors?: Pick<Agent, "id" | "name" | "color" | "avatarEmoji">[];
   agentTeams: AgentTeam[];
   agentRuntimes: AgentRuntime[];
   agentBehaviorSettings: AgentBehaviorSettings;
@@ -240,7 +242,10 @@ export function createAgent(params: {
 export function toggleAgentTool(agentId: string, toolId: string): Promise<void> {
   return request(`/api/agents/${agentId}/tools/${toolId}`, { method: "PATCH" });
 }
-export function updateAgentConfig(agentId: string, config: { model: string; runtimeId: string }): Promise<void> {
+export function updateAgentConfig(
+  agentId: string,
+  config: { model: string; runtimeId: string; name: string; instructions: string }
+): Promise<void> {
   return request(`/api/agents/${agentId}/config`, { method: "PATCH", body: JSON.stringify(config) });
 }
 export function removeAgent(agentId: string): Promise<void> {

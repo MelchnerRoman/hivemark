@@ -7,6 +7,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { uploadRoomFile } from "@/lib/api";
 import { useStickToBottom } from "@/lib/useStickToBottom";
+import { attachmentName } from "@/lib/display";
 import { MessageRow } from "./MessageRow";
 import type { Agent } from "@/lib/types";
 
@@ -18,6 +19,7 @@ export function ChatPane({ taskRoomId }: { taskRoomId: string }) {
   const messages = useStore(useShallow((s) => s.messages.filter((m) => m.taskRoomId === taskRoomId)));
   const members = useStore((s) => s.members);
   const agents = useStore((s) => s.agents);
+  const messageAuthors = useStore((s) => s.messageAuthors);
   const editMessage = useStore((s) => s.editMessage);
   const deleteMessage = useStore((s) => s.deleteMessage);
   const currentMemberId = useStore((s) => s.currentMemberId);
@@ -30,7 +32,7 @@ export function ChatPane({ taskRoomId }: { taskRoomId: string }) {
       const m = members.find((x) => x.id === authorId);
       return { name: m?.name ?? "Unknown", initials: m?.initials ?? "?", color: m?.color ?? "#999" };
     }
-    const a = agents.find((x) => x.id === authorId);
+    const a = agents.find((x) => x.id === authorId) ?? messageAuthors.find((x) => x.id === authorId);
     return { name: a ? `${a.name} (agent)` : "Agent", initials: a?.avatarEmoji ?? "🤖", color: a?.color ?? "#5b5cff" };
   }
 
@@ -158,7 +160,7 @@ function ChatComposer({ taskRoomId, roomId }: { taskRoomId: string; roomId: stri
         <div className="absolute bottom-full left-4 right-4 mb-1 flex flex-wrap gap-1.5">
           {pendingAttachments.map((p) => (
             <span key={p} className="flex items-center gap-1 rounded-full bg-brand-soft px-2.5 py-1 text-xs text-brand">
-              {p.split("/").pop()?.replace(/^\d+-/, "")}
+              {attachmentName(p)}
               <button
                 type="button"
                 aria-label={`Remove ${p}`}

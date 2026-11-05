@@ -21,3 +21,8 @@ export const TASK_ROOM_STATUS_LABEL: Record<TaskRoomStatus, string> = {
 export function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
+
+/** An attachment's file name without the upload's `${Date.now()}-` prefix (ChatPane). */
+export function attachmentName(path: string) {
+  return path.split("/").pop()!.replace(/^\d{13}-/, "");
+}

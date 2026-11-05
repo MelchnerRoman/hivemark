@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { repo } from "./db.js";
 
@@ -5,18 +6,23 @@ import { repo } from "./db.js";
  * the provider (listModels below). Turns need the API id ("claude-sonnet-5-5"). */
 let anthropicModels: { id: string; name: string }[] = [];
 let fetchedAt = 0;
+/** sha256 of the key the cached list was fetched with: a replaced key refetches. */
+let fetchedFor = "";
+const keyHash = (k: string) => createHash("sha256").update(k).digest("hex");
 
 /** Display names from Anthropic's models API, newest first. Empty when no
  * API key is stored (e.g. Claude Code on a subscription) — the UI then shows
- * its built-in list. Cached for 10 minutes. */
+ * its built-in list. Cached for 10 minutes per key. */
 export async function listAnthropicModels(): Promise<string[]> {
   const apiKey = repo.getConnectionValue("anthropic");
   if (!apiKey) return [];
-  if (Date.now() - fetchedAt > 10 * 60_000) {
+  const hash = keyHash(apiKey);
+  if (hash !== fetchedFor || Date.now() - fetchedAt > 10 * 60_000) {
     const models: { id: string; name: string }[] = [];
     for await (const m of new Anthropic({ apiKey, timeout: 15_000, maxRetries: 1 }).models.list({ limit: 100 })) models.push({ id: m.id, name: m.display_name });
     anthropicModels = models;
     fetchedAt = Date.now();
+    fetchedFor = hash;
   }
   return anthropicModels.map((m) => m.name);
 }
@@ -34,11 +40,14 @@ export async function listOpenRouterModels(): Promise<string[]> {
 
 /** Fetched list first; otherwise Anthropic's naming convention
  * ("Claude Sonnet 5.5" -> "claude-sonnet-5-5"), which also passes raw ids
- * through unchanged. No model set -> the newest Sonnet. */
+ * through unchanged. No model set -> the newest Sonnet. A list fetched with
+ * another (replaced or removed) key is ignored. */
 export function resolveModelId(displayName: string): string {
-  if (!displayName) return anthropicModels.find((m) => m.id.includes("sonnet"))?.id ?? "claude-sonnet-5-5";
+  const apiKey = repo.getConnectionValue("anthropic");
+  const models = apiKey && keyHash(apiKey) === fetchedFor ? anthropicModels : [];
+  if (!displayName) return models.find((m) => m.id.includes("sonnet"))?.id ?? "claude-sonnet-5-5";
   return (
-    anthropicModels.find((m) => m.name === displayName)?.id ??
+    models.find((m) => m.name === displayName)?.id ??
     displayName.trim().toLowerCase().replace(/[\s.]+/g, "-")
   );
 }

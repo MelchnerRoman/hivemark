@@ -84,6 +84,8 @@ type MockBlock = { text: string } | { tool: string; input: Record<string, unknow
 export type MockAnthropic = {
   url: string;
   requests: any[];
+  /** What GET /v1/models lists; replace it to simulate another account's key. */
+  models: typeof MOCK_MODELS;
   close: () => void;
 };
 
@@ -94,13 +96,14 @@ export async function startMockAnthropic(
 ): Promise<MockAnthropic> {
   const requests: any[] = [];
   let n = 0;
+  const mock = { requests, models: MOCK_MODELS };
   const server = http.createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", async () => {
       if (req.method === "GET" && req.url?.startsWith("/v1/models")) {
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ data: MOCK_MODELS, has_more: false, first_id: null, last_id: null }));
+        res.end(JSON.stringify({ data: mock.models, has_more: false, first_id: null, last_id: null }));
         return;
       }
       const body = JSON.parse(raw);
@@ -128,7 +131,7 @@ export async function startMockAnthropic(
   });
   const port = await freePort();
   await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
-  return { url: `http://127.0.0.1:${port}`, requests, close: () => server.close() };
+  return Object.assign(mock, { url: `http://127.0.0.1:${port}`, close: () => server.close() });
 }
 
 /** GET with the path sent byte-for-byte. fetch() follows the URL standard

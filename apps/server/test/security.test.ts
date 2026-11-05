@@ -191,6 +191,31 @@ describe("auth enabled (multi-user)", () => {
     assert.equal((await s.req("/api/rooms/room-b/agents", { method: "POST", as: "out", body: JSON.stringify({ agentId }) })).status, 403);
   });
 
+  test("agent name/instructions edits: task room members only, validated", async () => {
+    const patch = (as: string, body: object) => s.req(`/api/agents/${agentId}/config`, { method: "PATCH", as, body: JSON.stringify(body) });
+    assert.equal((await patch("out", { instructions: "pwned" })).status, 403);
+    assert.equal((await patch("in", { name: "  " })).status, 400);
+    assert.equal((await patch("in", { instructions: 42 })).status, 400);
+    assert.equal((await patch("in", { name: " Secret ", instructions: "TOP-SECRET-PLAN" })).status, 200);
+    const row = s.db.prepare("SELECT name, instructions, model FROM agents WHERE id = ?").get(agentId);
+    assert.deepEqual(row, { name: "Secret", instructions: "TOP-SECRET-PLAN", model: "x" }, "omitted fields kept");
+  });
+
+  test("members see who wrote a message in their room, not the hidden agent's details", async () => {
+    s.db
+      .prepare("INSERT INTO messages (id, task_room_id, author_type, author_id, content, created_at) VALUES (?,?,?,?,?,?)")
+      .run("by-secret", "tr-b", "agent", agentId, "hi from Secret", "2026-01-01T00:00:00Z");
+    const out = await (await s.req("/api/state", { as: "out" })).json();
+    assert.equal(out.agents.some((a: { id: string }) => a.id === agentId), false);
+    assert.deepEqual(out.messageAuthors, [{ id: agentId, name: "Secret", color: "#000", avatarEmoji: "x" }]);
+    assert.doesNotMatch(JSON.stringify(out), /TOP-SECRET-PLAN/);
+    // an agent that never wrote in a visible room isn't listed
+    const inS = await (await s.req("/api/state", { as: "in" })).json();
+    assert.deepEqual(inS.messageAuthors, []);
+    s.db.prepare("DELETE FROM messages WHERE id = 'by-secret'").run();
+    assert.deepEqual((await (await s.req("/api/state", { as: "out" })).json()).messageAuthors, []);
+  });
+
   test("teams: creator or owner can delete, nobody else", async () => {
     const create = (as: string) =>
       s.req("/api/agent-teams", { method: "POST", as, body: JSON.stringify({ name: "t", agentIds: [], mode: "x" }) }).then((r) => r.json());

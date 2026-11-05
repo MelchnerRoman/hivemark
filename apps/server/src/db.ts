@@ -897,6 +897,18 @@ export const repo = {
       (a) => isOwner || visibleTaskRoomIds.has(a.taskRoomId) || (!!a.roomId && visibleRoomIds.has(a.roomId))
     );
     const visibleAgentIds = new Set(agents.map((a) => a.id));
+    const authorIds = isOwner
+      ? new Set<string>()
+      : new Set(
+          (
+            db
+              .prepare("SELECT DISTINCT author_id FROM messages WHERE author_type = 'agent' AND task_room_id IN (SELECT value FROM json_each(?))")
+              .all(JSON.stringify([...visibleTaskRoomIds])) as { author_id: string }[]
+          ).map((r) => r.author_id)
+        );
+    const messageAuthors = full.agents
+      .filter((a) => authorIds.has(a.id) && !visibleAgentIds.has(a.id))
+      .map(({ id, name, color, avatarEmoji }) => ({ id, name, color, avatarEmoji }));
 
     // A client may only build on its previous state if it was for the same
     // member seeing the same things — otherwise a newly joined room's older
@@ -942,6 +954,7 @@ export const repo = {
       taskRooms: full.taskRooms.filter((t) => visibleTaskRoomIds.has(t.id)),
       messages,
       agents,
+      messageAuthors,
       agentTeams: isOwner
         ? full.agentTeams
         : full.agentTeams.map((t) => ({ ...t, agentIds: t.agentIds.filter((id) => visibleAgentIds.has(id)) })),
@@ -1156,12 +1169,12 @@ export const repo = {
     return rowToAgent(db.prepare("SELECT * FROM agents WHERE id = ?").get(agentId));
   },
 
-  updateAgentConfig(agentId: string, params: { model: string; runtimeId: string }) {
-    db.prepare("UPDATE agents SET model = ?, runtime_id = ? WHERE id = ?").run(
-      params.model,
-      params.runtimeId,
-      agentId
-    );
+  /** Omitted fields keep their current value. */
+  updateAgentConfig(agentId: string, params: { model?: string; runtimeId?: string; name?: string; instructions?: string }) {
+    db.prepare(
+      `UPDATE agents SET model = COALESCE(?, model), runtime_id = COALESCE(?, runtime_id),
+       name = COALESCE(?, name), instructions = COALESCE(?, instructions) WHERE id = ?`
+    ).run(params.model ?? null, params.runtimeId ?? null, params.name ?? null, params.instructions ?? null, agentId);
   },
 
   getAgent(agentId: string): Agent | null {

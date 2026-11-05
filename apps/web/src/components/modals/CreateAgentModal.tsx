@@ -4,7 +4,7 @@ import { FormEvent, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { useStore } from "@/lib/store";
-import { AGENT_COLOR_OPTIONS, AGENT_EMOJI_OPTIONS, AGENT_ROLE_PRESETS, modelProvider } from "@/lib/agent-constants";
+import { AGENT_COLOR_OPTIONS, AGENT_EMOJI_OPTIONS, AGENT_ROLE_PRESETS, GRANT_WARNINGS, modelProvider } from "@/lib/agent-constants";
 import { RuntimeSelect } from "@/components/agents/RuntimeSelect";
 import { ModelInput } from "@/components/agents/ModelInput";
 
@@ -42,6 +42,8 @@ function CreateAgentForm({
   const mcpTools = useStore((s) => s.mcpTools);
   const [name, setName] = useState("");
   const [toolIds, setToolIds] = useState<string[]>([]);
+  /** Warned tools (GRANT_WARNINGS) the user accepted for this preset. */
+  const [acceptedIds, setAcceptedIds] = useState<string[]>([]);
   const [instructions, setInstructions] = useState(agentDefaults.instructions);
   const [color, setColor] = useState(AGENT_COLOR_OPTIONS[0]);
   const [emoji, setEmoji] = useState(AGENT_EMOJI_OPTIONS[0]);
@@ -50,7 +52,8 @@ function CreateAgentForm({
   const [taskRoomId, setTaskRoomId] = useState(fixedTaskRoomId ?? taskRooms[0]?.id ?? "");
 
   const needsTaskRoomPicker = !fixedTaskRoomId;
-  const canSubmit = name.trim().length > 0 && taskRoomId.length > 0;
+  const unconfirmed = toolIds.filter((id) => GRANT_WARNINGS[id] && !acceptedIds.includes(id));
+  const canSubmit = name.trim().length > 0 && taskRoomId.length > 0 && unconfirmed.length === 0;
 
   function handleRuntimeChange(nextRuntimeId: string) {
     setRuntimeId(nextRuntimeId);
@@ -63,6 +66,7 @@ function CreateAgentForm({
     setEmoji(preset.emoji);
     setInstructions(preset.instructions);
     setToolIds(preset.toolIds.filter((id) => mcpTools.some((t) => t.id === id)));
+    setAcceptedIds([]);
   }
 
   function handleSubmit(e: FormEvent) {
@@ -180,6 +184,20 @@ function CreateAgentForm({
           : ""}
         You can change tool access after it&apos;s created.
       </p>
+      {unconfirmed.map((id) => (
+        <div
+          key={id}
+          className="flex flex-wrap items-center gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger"
+        >
+          <span className="mr-auto">{GRANT_WARNINGS[id](name.trim() || "this agent")}</span>
+          <Button type="button" variant="ghost" onClick={() => setToolIds((ids) => ids.filter((x) => x !== id))}>
+            Don&apos;t grant
+          </Button>
+          <Button type="button" variant="danger" onClick={() => setAcceptedIds((ids) => [...ids, id])}>
+            Grant access
+          </Button>
+        </div>
+      ))}
       <div className="sticky bottom-0 flex justify-end gap-2 bg-surface py-1">
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel

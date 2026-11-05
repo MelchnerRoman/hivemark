@@ -110,6 +110,17 @@ test("the model list comes from the provider", async () => {
   assert.deepEqual(models, MOCK_MODELS.map((m) => m.display_name));
 });
 
+test("replacing the Anthropic key refetches the model list (cache is per key)", async () => {
+  const list = async () => (await (await s.req("/api/models?provider=anthropic")).json()).models;
+  mock.models = [{ ...MOCK_MODELS[0], id: "claude-other-1", display_name: "Claude Other 1" }];
+  assert.deepEqual(await list(), MOCK_MODELS.map((m) => m.display_name), "same key: still cached");
+  await s.req("/api/connections/anthropic", { method: "PUT", body: JSON.stringify({ value: "sk-ant-test-2" }) });
+  assert.deepEqual(await list(), ["Claude Other 1"]);
+  mock.models = MOCK_MODELS;
+  await s.req("/api/connections/anthropic", { method: "PUT", body: JSON.stringify({ value: "sk-ant-test" }) });
+  assert.deepEqual(await list(), MOCK_MODELS.map((m) => m.display_name));
+});
+
 test("a single message over the history budget still reaches the agent (cut off)", async () => {
   const before = mock.requests.length;
   await s.req("/api/task-rooms/tr-onboarding/messages", {

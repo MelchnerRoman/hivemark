@@ -112,7 +112,7 @@ function fail(err: unknown) {
  * loading history doesn't trigger a notification storm. */
 function notifyNewAgentMessages(
   before: { messages: ChatMessage[]; directMessages: DirectMessage[] },
-  after: { messages: ChatMessage[]; directMessages: DirectMessage[]; agents: Agent[] }
+  after: { messages: ChatMessage[]; directMessages: DirectMessage[]; agents: Pick<Agent, "id" | "name">[] }
 ) {
   if (!hasHydratedOnce) return;
   if (typeof window === "undefined" || typeof Notification === "undefined") return;
@@ -152,6 +152,7 @@ type Store = {
   messages: ChatMessage[];
   directMessages: DirectMessage[];
   agents: Agent[];
+  messageAuthors: NonNullable<api.BackendState["messageAuthors"]>;
   agentTeams: AgentTeam[];
   agentRuntimes: AgentRuntime[];
   agentBehaviorSettings: AgentBehaviorSettings;
@@ -221,7 +222,7 @@ type Store = {
     toolIds?: string[]
   ) => void;
   toggleAgentTool: (agentId: string, toolId: string) => void;
-  updateAgentConfig: (agentId: string, model: string, runtimeId: string) => void;
+  updateAgentConfig: (agentId: string, config: { model: string; runtimeId: string; name: string; instructions: string }) => void;
   removeAgent: (agentId: string) => void;
   runAgent: (agentId: string) => void;
   stopAgent: (agentId: string) => void;
@@ -253,6 +254,7 @@ export const useStore = create<Store>((set, get) => ({
   messages: [],
   directMessages: [],
   agents: [],
+  messageAuthors: [],
   agentTeams: [],
   agentRuntimes: [],
   agentBehaviorSettings: DEFAULT_AGENT_BEHAVIOR,
@@ -287,7 +289,7 @@ export const useStore = create<Store>((set, get) => ({
     syncCursor = state.sync ? { seq: state.sync.seq, scope: state.sync.scope } : null;
     notifyNewAgentMessages(
       { messages: before.messages, directMessages: before.directMessages },
-      { messages, directMessages, agents: state.agents }
+      { messages, directMessages, agents: [...state.agents, ...(state.messageAuthors ?? [])] }
     );
     hasHydratedOnce = true;
     const anthropic = state.connections.find((c) => c.key === "anthropic");
@@ -299,6 +301,7 @@ export const useStore = create<Store>((set, get) => ({
       messages,
       directMessages,
       agents: keepIfSame(s.agents, state.agents),
+      messageAuthors: keepIfSame(s.messageAuthors, state.messageAuthors ?? []),
       agentTeams: keepIfSame(s.agentTeams, state.agentTeams),
       agentRuntimes: keepIfSame(s.agentRuntimes, state.agentRuntimes),
       agentBehaviorSettings: keepIfSame(s.agentBehaviorSettings, state.agentBehaviorSettings),
@@ -508,9 +511,9 @@ export const useStore = create<Store>((set, get) => ({
     api.toggleAgentTool(agentId, toolId).then(refresh, fail);
   },
 
-  updateAgentConfig: (agentId, model, runtimeId) => {
-    set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, model, runtimeId } : a)) }));
-    api.updateAgentConfig(agentId, { model, runtimeId }).then(refresh, fail);
+  updateAgentConfig: (agentId, config) => {
+    set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, ...config } : a)) }));
+    api.updateAgentConfig(agentId, config).then(refresh, fail);
   },
 
   removeAgent: (agentId) => {

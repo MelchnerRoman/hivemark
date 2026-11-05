@@ -201,6 +201,9 @@ export type AppState = {
   messages: ChatMessage[];
   directMessages: DirectMessage[];
   agents: Agent[];
+  /** Name/look of agents the caller can't see that wrote messages in task
+   * rooms they can — enough to render the message, nothing more. */
+  messageAuthors?: Pick<Agent, "id" | "name" | "color" | "avatarEmoji">[];
   agentTeams: AgentTeam[];
   agentRuntimes: AgentRuntime[];
   agentBehaviorSettings: AgentBehaviorSettings;

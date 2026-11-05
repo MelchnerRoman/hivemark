@@ -14,6 +14,16 @@ export function modelProvider(runtimeId: string): "anthropic" | "openrouter" | "
 
 export const AGENT_EMOJI_OPTIONS = ["🤖", "🐝", "🦊", "👾", "🎯", "🧠", "⚡", "🔎", "✍️", "🩹", "🎨", "💻"];
 
+export const BASH_ACCESS_TOOL_ID = "bash-access";
+/** Grants that run real code on this machine — confirmed inline first
+ * (AgentsPanel's grant chips, CreateAgentModal's role presets). */
+export const GRANT_WARNINGS: Record<string, (agentName: string) => string> = {
+  "mcp-preview": (name) =>
+    `This lets ${name} run a real npm install + dev server on this machine, confined to this room's project folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`,
+  [BASH_ACCESS_TOOL_ID]: (name) =>
+    `This lets ${name} run real shell commands and edit files on this machine, confined to its own workspace folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`,
+};
+
 /** Starting points for an agency-style team. Instructions' first line doubles
  * as the role other agents see in their teammate list (see claudeAgent.ts). */
 export const AGENT_ROLE_PRESETS = [

@@ -33,6 +33,7 @@ export function AgentsGalleryView() {
   const [defaultsOpen, setDefaultsOpen] = useState(false);
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [createTeamOpen, setCreateTeamOpen] = useState(false);
   const [teamMenuOpenId, setTeamMenuOpenId] = useState<string | null>(null);
   const [addTeamModalId, setAddTeamModalId] = useState<string | null>(null);
@@ -123,7 +124,7 @@ export function AgentsGalleryView() {
                     </button>
                     <button
                       onClick={() => {
-                        removeAgent(agent.id);
+                        setConfirmRemoveId(agent.id);
                         setOpenMenuId(null);
                       }}
                       className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-danger hover:bg-danger-soft"
@@ -176,6 +177,26 @@ export function AgentsGalleryView() {
                     {room?.emoji} {taskRoom.emoji} {taskRoom.name}
                     {agent.roomId && " · Room-wide"}
                   </p>
+                )}
+                {confirmRemoveId === agent.id && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="mt-3 flex w-full cursor-default flex-wrap items-center justify-center gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger"
+                  >
+                    <span className="w-full">Remove {agent.name}? This can&apos;t be undone.</span>
+                    <Button variant="ghost" onClick={() => setConfirmRemoveId(null)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="danger"
+                      onClick={() => {
+                        removeAgent(agent.id);
+                        setConfirmRemoveId(null);
+                      }}
+                    >
+                      Remove agent
+                    </Button>
+                  </div>
                 )}
               </div>
             );

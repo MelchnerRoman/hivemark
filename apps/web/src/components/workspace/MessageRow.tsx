@@ -4,7 +4,7 @@ import { memo, useState } from "react";
 import { Avatar } from "@/components/ui/Avatar";
 import { AuthImage } from "@/components/ui/AuthImage";
 import { downloadRoomFile, isImagePath } from "@/lib/api";
-import { formatTime } from "@/lib/display";
+import { attachmentName, formatTime } from "@/lib/display";
 
 /** One chat message (Task Room chat and DMs). Memoized with only primitive /
  * stable props, so a new message, a keystroke in the composer, or opening an
@@ -111,7 +111,7 @@ export const MessageRow = memo(function MessageRow({
                   onClick={() => downloadRoomFile(roomId, p)}
                   className="rounded-lg border border-border bg-surface px-3 py-2 text-xs hover:border-brand"
                 >
-                  📄 {p.split("/").pop()}
+                  📄 {attachmentName(p)}
                 </button>
               )
             )}

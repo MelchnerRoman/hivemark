@@ -797,7 +797,12 @@ app.patch(
   handle((req, res) => {
     const agent = requireAgentAccess(req, res);
     if (!agent) return;
-    repo.updateAgentConfig(req.params.agentId, req.body);
+    const { model, runtimeId, name, instructions } = req.body ?? {};
+    if ([model, runtimeId, name, instructions].some((v) => v !== undefined && typeof v !== "string")) {
+      return res.status(400).json({ error: "model, runtimeId, name and instructions must be strings" });
+    }
+    if (name !== undefined && !name.trim()) return res.status(400).json({ error: "name can't be empty" });
+    repo.updateAgentConfig(agent.id, { model, runtimeId, name: name?.trim(), instructions: instructions?.trim() });
     bus.emit("sync");
     res.json({ ok: true });
   })
@@ -1072,6 +1077,7 @@ app.put(
       return res.status(400).json({ error: "That doesn't look like a valid key/token — it contains non-ASCII characters (e.g. emoji or line breaks). Check what you pasted." });
     }
     repo.setConnection(key, value);
+    if (key === "anthropic") listAnthropicModels().catch(() => {}); // re-warm for the new key
     bus.emit("sync");
     res.json({ ok: true });
   })

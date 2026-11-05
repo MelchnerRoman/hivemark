@@ -1,6 +1,6 @@
 "use client";
 
-import { modelProvider } from "@/lib/agent-constants";
+import { BASH_ACCESS_TOOL_ID, GRANT_WARNINGS, modelProvider } from "@/lib/agent-constants";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/lib/store";
@@ -13,15 +13,7 @@ import { RuntimeSelect } from "@/components/agents/RuntimeSelect";
 import { ModelInput } from "@/components/agents/ModelInput";
 import type { Agent } from "@/lib/types";
 
-const BASH_ACCESS_TOOL_ID = "bash-access";
 const BASH_CAPABLE_RUNTIMES = ["runtime-claude-code", "runtime-codex"];
-/** Grants that run real code on this machine — confirmed inline first. */
-const GRANT_WARNINGS: Record<string, (agentName: string) => string> = {
-  "mcp-preview": (name) =>
-    `This lets ${name} run a real npm install + dev server on this machine, confined to this room's project folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`,
-  [BASH_ACCESS_TOOL_ID]: (name) =>
-    `This lets ${name} run real shell commands and edit files on this machine, confined to its own workspace folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`,
-};
 
 export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
   const agents = useStore(useShallow((s) => s.agents));
@@ -45,7 +37,9 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
     <div className="h-full overflow-y-auto px-6 py-4">
       <div className="mb-5 flex items-center justify-between">
         <p className="text-sm text-foreground-muted">
-          Every agent is available here — @mention one in chat to bring it in.
+          {agents.length > 0
+            ? "Every agent you can see is listed here — @mention one in chat to bring it in."
+            : "Agents in this task room will show up here."}
         </p>
         <Button onClick={() => setCreateOpen(true)}>New agent</Button>
       </div>
@@ -73,7 +67,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                         onClick={() => setEditingAgentId(editingAgentId === agent.id ? null : agent.id)}
                         className="text-brand hover:underline"
                       >
-                        {editingAgentId === agent.id ? "Cancel" : "Edit runtime/model"}
+                        {editingAgentId === agent.id ? "Cancel" : "Edit agent"}
                       </button>
                     </p>
                   </div>
@@ -103,7 +97,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                 <AgentConfigEditor agent={agent} onDone={() => setEditingAgentId(null)} />
               )}
 
-              {agent.instructions && (
+              {agent.instructions && editingAgentId !== agent.id && (
                 <p className="mt-3 text-sm text-foreground-muted">{agent.instructions}</p>
               )}
 
@@ -205,7 +199,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
 
         {agents.length === 0 && (
           <p className="pt-10 text-center text-sm text-foreground-muted">
-            No agents yet. Create one and grant it MCP tools to get started.
+            No agents here yet. Create one and grant it MCP tools to get started.
           </p>
         )}
       </div>
@@ -217,6 +211,8 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
 
 function AgentConfigEditor({ agent, onDone }: { agent: Agent; onDone: () => void }) {
   const updateAgentConfig = useStore((s) => s.updateAgentConfig);
+  const [name, setName] = useState(agent.name);
+  const [instructions, setInstructions] = useState(agent.instructions);
   const [runtimeId, setRuntimeId] = useState(agent.runtimeId);
   const [model, setModel] = useState(agent.model);
 
@@ -227,19 +223,40 @@ function AgentConfigEditor({ agent, onDone }: { agent: Agent; onDone: () => void
   }
 
   function handleSave() {
-    updateAgentConfig(agent.id, model, runtimeId);
+    updateAgentConfig(agent.id, { model, runtimeId, name: name.trim(), instructions: instructions.trim() });
     onDone();
   }
 
   return (
     <div className="mt-3 space-y-3 rounded-lg border border-border bg-surface-raised p-3">
+      <div>
+        <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Agent name</label>
+        <input
+          aria-label="Agent name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
+        />
+      </div>
+      <div>
+        <label className="mb-1.5 block text-xs font-medium text-foreground-muted">Instructions</label>
+        <textarea
+          aria-label="Instructions"
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          rows={5}
+          className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
+        />
+      </div>
       <RuntimeSelect value={runtimeId} onChange={handleRuntimeChange} />
       <ModelInput runtimeId={runtimeId} value={model} onChange={setModel} />
       <div className="flex justify-end gap-2">
         <Button variant="ghost" onClick={onDone}>
           Cancel
         </Button>
-        <Button onClick={handleSave}>Save</Button>
+        <Button onClick={handleSave} disabled={!name.trim()}>
+          Save
+        </Button>
       </div>
     </div>
   );

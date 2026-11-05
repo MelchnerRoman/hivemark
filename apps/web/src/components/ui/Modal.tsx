@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect, useRef } from "react";
+import { useStore } from "@/lib/store";
 
 const SIZE_CLASSES = {
   md: "max-w-md",
@@ -37,6 +38,11 @@ export function Modal({
       if (field && field.getBoundingClientRect().bottom <= dialog.getBoundingClientRect().bottom) field.focus();
     }
     if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  // An error toast raised over this modal goes with it (closed or unmounted).
+  useEffect(() => {
+    if (open) return () => useStore.setState({ actionError: null });
   }, [open]);
 
   return (
