@@ -112,7 +112,7 @@ npm run build:web       # static-exports apps/web to apps/web/out
 npm run build:desktop   # build:web, then builds apps/server + packages the Electron app
 ```
 
-`build:desktop` bundles `apps/server`'s compiled `dist/` + `node_modules` into the packaged app (so it doesn't depend on the end user having Node installed), then an `afterPack` hook (`apps/desktop/scripts/afterPack.js`) rebuilds `better-sqlite3`'s native binding against Electron's own Node ABI *for each target architecture* — so the arm64 and x64 DMGs each get the right binary, whichever Mac builds them. The packaged app keeps its database in the OS app-data folder (`HIVEMARK_DATA_DIR`), not inside the app bundle. 
+`build:desktop` bundles `apps/server`'s compiled `dist/` + `node_modules` into the packaged app (so it doesn't depend on the end user having Node installed), `better-sqlite3` (13+, N-API) ships prebuilt binaries for every platform/arch inside its package and picks one at runtime, so no rebuild against Electron is needed; an `afterPack` hook (`apps/desktop/scripts/afterPack.js`) strips the prebuilds for other platforms/archs so each app (e.g. the arm64 DMG) only carries its own binary. The packaged app keeps its database in the OS app-data folder (`HIVEMARK_DATA_DIR`), not inside the app bundle. 
 
 ### A gotcha if you touch `apps/desktop/package.json`
 

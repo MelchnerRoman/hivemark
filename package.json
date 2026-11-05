@@ -14,7 +14,7 @@
     "build:desktop": "npm run build:web && npm run build:electron --workspace=desktop"
   },
   "allowScripts": {
-    "better-sqlite3@12.11.1": true,
-    "electron@33.4.11": true
+    "better-sqlite3@13.0.3": true,
+    "electron@45.2.3": true
   }
 }
