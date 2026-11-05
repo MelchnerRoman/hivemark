@@ -67,6 +67,13 @@ describe("auth disabled (local mode)", () => {
     assert.equal((await put("&overwrite=1")).status, 200);
   });
 
+  test("the seeded demo loop is paused, so a fresh install makes no LLM call on its own", async () => {
+    const state = await (await s.req("/api/state")).json();
+    const loop = state.loops.find((l: { id: string }) => l.id === "loop-funnel-check");
+    assert.equal(loop.active, false);
+    assert.equal(s.db.prepare("SELECT COUNT(*) n FROM loops WHERE active = 1").get().n, 0);
+  });
+
   test("DNS rebinding: foreign Host header is refused", async () => {
     assert.equal(await rawGet(s.url, "/api/state", { Host: "attacker.example" }), 403);
     assert.equal(await rawGet(s.url, "/api/state"), 200);
@@ -138,6 +145,24 @@ describe("auth enabled (multi-user)", () => {
     const body = JSON.stringify({ value: "sk-evil" });
     assert.equal((await s.req("/api/connections/anthropic", { method: "PUT", as: "in", body })).status, 403);
     assert.equal((await s.req("/api/connections/anthropic", { method: "PUT", as: "own", body })).status, 200);
+  });
+
+  test("members get no key hints and no agent ids from rooms they can't see", async () => {
+    s.db.prepare("INSERT INTO agent_teams (id, name, mode, agent_ids) VALUES ('team-mixed','M','auto',?)").run(JSON.stringify([agentId]));
+    const state = async (as: string) => (await s.req("/api/state", { as })).json();
+    const [own, inS, out] = await Promise.all([state("own"), state("in"), state("out")]);
+    const anthropic = (st: { connections: { key: string; connected: boolean; hint: string | null }[] }) =>
+      st.connections.find((c) => c.key === "anthropic")!;
+    assert.equal(anthropic(own).hint, "evil");
+    for (const st of [inS, out]) {
+      assert.equal(anthropic(st).connected, true);
+      assert.ok(st.connections.every((c: { hint: string | null }) => c.hint === null));
+    }
+    const team = (st: { agentTeams: { id: string; agentIds: string[] }[] }) => st.agentTeams.find((t) => t.id === "team-mixed")!;
+    assert.deepEqual(team(own).agentIds, [agentId]);
+    assert.deepEqual(team(inS).agentIds, [agentId]);
+    assert.deepEqual(team(out).agentIds, []);
+    s.db.prepare("DELETE FROM agent_teams WHERE id = 'team-mixed'").run();
   });
 
   test("/api/state only carries messages from task rooms the caller can see", async () => {

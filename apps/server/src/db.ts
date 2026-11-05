@@ -532,7 +532,9 @@ function seedDemoWorkspace() {
   const insertLoop = db.prepare(
     "INSERT INTO loops (id, task_room_id, name, schedule, active, last_run, next_run) VALUES (?,?,?,?,?,?,?)"
   );
-  insertLoop.run("loop-funnel-check", "tr-onboarding", "Daily funnel health check", "Every day at 08:00", 1, "2026-07-30T08:00:00Z", "2026-07-31T08:00:00Z");
+  // Paused: an active demo loop is due on first boot (next_run is long past)
+  // and would make an LLM call nobody asked for. Users can resume it.
+  insertLoop.run("loop-funnel-check", "tr-onboarding", "Daily funnel health check", "Every day at 08:00", 0, "2026-07-30T08:00:00Z", "2026-07-31T08:00:00Z");
 
   const insertTodo = db.prepare(
     "INSERT INTO todos (id, task_room_id, text, done, assignee_id, due_date) VALUES (?,?,?,?,?,?)"
@@ -545,6 +547,13 @@ function seedDemoWorkspace() {
 
 seedCatalog();
 seedDemoWorkspace();
+// The old seed made the demo loop active — pause it where it's still untouched
+// (never run: seed timestamps and no run history), so it doesn't fire on boot.
+db.prepare(
+  `UPDATE loops SET active = 0 WHERE id = 'loop-funnel-check' AND active = 1
+   AND last_run = '2026-07-30T08:00:00Z' AND next_run = '2026-07-31T08:00:00Z'
+   AND NOT EXISTS (SELECT 1 FROM loop_runs WHERE loop_id = 'loop-funnel-check')`
+).run();
 
 // Member DMs written before author_id existed (and the demo seed's) were all
 // by the single pre-auth member — attribute them so the edit/delete
@@ -864,8 +873,9 @@ export const repo = {
   /** The public /api/state response for a given caller — the owner sees
    * everything (unscoped), any other member only sees rooms/task rooms
    * they're actually listed on and everything derived from those (messages,
-   * agents, workflows, loops, todos). members/mcpTools/agentTeams/runtimes/
-   * defaults/behaviorSettings/connections stay unscoped. DMs are private to
+   * agents, workflows, loops, todos, and agentTeams' agent ids).
+   * members/mcpTools/runtimes/defaults/behaviorSettings/connections stay
+   * unscoped, minus owner-only detail (connection hints, custom server config). DMs are private to
    * their member for everyone, the owner included.
    * Visibility is computed in memory from the rooms/task rooms loaded here —
    * the same rule as isTaskRoomMember/canSeeAgent, minus their per-agent and
@@ -932,6 +942,11 @@ export const repo = {
       taskRooms: full.taskRooms.filter((t) => visibleTaskRoomIds.has(t.id)),
       messages,
       agents,
+      agentTeams: isOwner
+        ? full.agentTeams
+        : full.agentTeams.map((t) => ({ ...t, agentIds: t.agentIds.filter((id) => visibleAgentIds.has(id)) })),
+      // Last 4 chars of the owner's keys are theirs alone; members just see connected.
+      connections: isOwner ? full.connections : full.connections.map((c) => ({ ...c, hint: null })),
       directMessages,
       workflows: full.workflows.filter((w) => visibleTaskRoomIds.has(w.taskRoomId)),
       loops: full.loops.filter((l) => visibleTaskRoomIds.has(l.taskRoomId)),
