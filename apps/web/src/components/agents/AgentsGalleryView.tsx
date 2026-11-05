@@ -38,7 +38,11 @@ export function AgentsGalleryView() {
   const [teamMenuOpenId, setTeamMenuOpenId] = useState<string | null>(null);
   const [addTeamModalId, setAddTeamModalId] = useState<string | null>(null);
 
-  const runningCount = agents.filter((a) => a.status === "running").length;
+  // Run/Stop need the agent's home task room; agents reached only through a
+  // Room attachment can be stopped only on the viewer's own DM turn.
+  const inHome = (a: Agent) => taskRooms.some((t) => t.id === a.taskRoomId);
+  const canStop = (a: Agent) => a.status === "running" && (inHome(a) || (!!a.activeTurn && "dm" in a.activeTurn));
+  const runningCount = agents.filter(canStop).length;
   const addTeamModalTeam = agentTeams.find((t) => t.id === addTeamModalId) ?? null;
 
   function contextFor(agent: Agent) {
@@ -136,7 +140,7 @@ export function AgentsGalleryView() {
 
                 <div className="relative">
                   <Avatar label={agent.avatarEmoji} color={agent.color} size={64} />
-                  {agent.status === "idle" && (
+                  {agent.status === "idle" && inHome(agent) && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -149,7 +153,7 @@ export function AgentsGalleryView() {
                       <span className="ml-0.5 text-[10px] leading-none">▶</span>
                     </button>
                   )}
-                  {agent.status === "running" && (
+                  {canStop(agent) && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

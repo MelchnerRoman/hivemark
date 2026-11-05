@@ -18,6 +18,7 @@ export function DirectMessageView() {
   const editDirectMessage = useStore((s) => s.editDirectMessage);
   const deleteDirectMessage = useStore((s) => s.deleteDirectMessage);
   const goToAgentInContext = useStore((s) => s.goToAgentInContext);
+  const inHome = useStore((s) => s.taskRooms.some((t) => t.id === agent?.taskRoomId));
   const me = useStore((s) => s.members.find((m) => m.id === s.currentMemberId));
   const stopAgent = useStore((s) => s.stopAgent);
   const working = !!agent?.activeTurn && "dm" in agent.activeTurn;
@@ -43,12 +44,16 @@ export function DirectMessageView() {
               <h2 className="font-display text-base font-semibold">{agent.name}</h2>
               <Badge tone={AGENT_STATUS_TONE[agent.status]}>{agent.status}</Badge>
             </div>
-            <button
-              onClick={() => goToAgentInContext(agent.id)}
-              className="text-xs text-foreground-muted hover:text-brand hover:underline"
-            >
-              {agent.model} · Open in task room
-            </button>
+            {inHome ? (
+              <button
+                onClick={() => goToAgentInContext(agent.id)}
+                className="text-xs text-foreground-muted hover:text-brand hover:underline"
+              >
+                {agent.model} · Open in task room
+              </button>
+            ) : (
+              <p className="text-xs text-foreground-muted">{agent.model}</p>
+            )}
           </div>
         </div>
       </header>
