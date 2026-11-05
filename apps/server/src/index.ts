@@ -843,9 +843,12 @@ app.post(
 app.post(
   "/api/agents/:agentId/stop",
   handle((req, res) => {
-    const agent = requireAgentAccess(req, res);
-    if (!agent) return;
-    if (!stopAgentTurn(agent.id, req.memberId)) repo.setAgentStatus(agent.id, "idle");
+    // Anyone who may DM the agent may stop their own DM turn; only members of
+    // its home task room may stop its Room turns (see stopAgentTurn).
+    const agent = repo.getAgent(req.params.agentId);
+    if (!agent || !repo.canSeeAgent(req.memberId, agent)) return res.status(404).json({ error: "agent not found" });
+    const dmOnly = !repo.isTaskRoomMember(agent.taskRoomId, req.memberId);
+    if (!stopAgentTurn(agent.id, req.memberId, dmOnly)) repo.setAgentStatus(agent.id, "idle");
     bus.emit("sync");
     res.json({ ok: true });
   })
@@ -854,8 +857,9 @@ app.post(
   "/api/agents/stop-all",
   handle((req, res) => {
     // Same scope as the single-agent stop route above.
-    for (const agent of repo.getAllAgents().filter((a) => repo.isTaskRoomMember(a.taskRoomId, req.memberId))) {
-      if (!stopAgentTurn(agent.id, req.memberId) && agent.status === "running") repo.setAgentStatus(agent.id, "idle");
+    for (const agent of repo.getAllAgents().filter((a) => repo.canSeeAgent(req.memberId, a))) {
+      const dmOnly = !repo.isTaskRoomMember(agent.taskRoomId, req.memberId);
+      if (!stopAgentTurn(agent.id, req.memberId, dmOnly) && agent.status === "running") repo.setAgentStatus(agent.id, "idle");
     }
     bus.emit("sync");
     res.json({ ok: true });

@@ -11,6 +11,8 @@ import { TaskRoomList } from "@/components/nav/TaskRoomList";
 import { TaskRoomWorkspace } from "@/components/workspace/TaskRoomWorkspace";
 import { AgentsGalleryView } from "@/components/agents/AgentsGalleryView";
 import { DirectMessageView } from "@/components/agents/DirectMessageView";
+import { Drawer } from "@/components/ui/Drawer";
+import { Logo } from "@/components/brand/Logo";
 
 // Module-level so a re-run boot (StrictMode's double effect) waits for the
 // same one-time code exchange instead of racing ahead without a token.
@@ -27,6 +29,29 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const syncError = useStore((s) => s.syncError);
+  // Below md the sidebar, and below lg the Task Room list, move into drawers.
+  const [navOpen, setNavOpen] = useState(false);
+  const [taskListOpen, setTaskListOpen] = useState(false);
+  // Navigating (picking a room, task room, DM…) closes them.
+  const navSeq = useStore((s) => s.navSeq);
+  const [prevNavSeq, setPrevNavSeq] = useState(navSeq);
+  if (navSeq !== prevNavSeq) {
+    setPrevNavSeq(navSeq);
+    setNavOpen(false);
+    setTaskListOpen(false);
+  }
+
+  // Widening past a breakpoint shows the panel inline again: close its drawer
+  // so it doesn't linger as a duplicate that keeps the page inert.
+  useEffect(() => {
+    const queries = ["(min-width: 48rem)", "(min-width: 64rem)"].map((q) => window.matchMedia(q));
+    const close = () => {
+      setNavOpen(false);
+      setTaskListOpen(false);
+    };
+    queries.forEach((q) => q.addEventListener("change", close));
+    return () => queries.forEach((q) => q.removeEventListener("change", close));
+  }, []);
 
   useEffect(() => {
     if (typeof Notification !== "undefined" && Notification.permission === "default") {
@@ -122,14 +147,36 @@ export default function Home() {
         </div>
       )}
       <ActionErrorToast />
-      <div className="flex min-h-0 w-full flex-1">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2 py-1.5 md:hidden">
+        <button
+          onClick={() => setNavOpen(true)}
+          aria-label="Open navigation"
+          aria-haspopup="dialog"
+          aria-expanded={navOpen}
+          className="flex h-9 w-9 items-center justify-center rounded-md text-lg text-foreground-muted hover:bg-surface-raised hover:text-foreground"
+        >
+          ☰
+        </button>
+        <Logo size={20} />
+      </div>
+      <Drawer open={navOpen} onClose={() => setNavOpen(false)} label="Navigation">
         <RoomSidebar />
+      </Drawer>
+      <Drawer open={taskListOpen} onClose={() => setTaskListOpen(false)} label="Task Rooms">
+        <TaskRoomList />
+      </Drawer>
+      <div className="flex min-h-0 w-full flex-1">
+        <div className="hidden md:contents">
+          <RoomSidebar />
+        </div>
         {view === "agents" && <AgentsGalleryView />}
         {view === "dm" && <DirectMessageView key={dmAgentId} />}
         {view === "rooms" && (
           <>
-            <TaskRoomList />
-            <TaskRoomWorkspace />
+            <div className="hidden lg:contents">
+              <TaskRoomList />
+            </div>
+            <TaskRoomWorkspace taskListOpen={taskListOpen} onOpenTaskList={() => setTaskListOpen(true)} />
           </>
         )}
       </div>

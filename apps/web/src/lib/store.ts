@@ -166,6 +166,8 @@ type Store = {
   selectedDmAgentId: string | null;
   activeTab: WorkspaceTab;
   view: AppView;
+  /** Bumped on every navigation, even to where you already are — closes the mobile drawers. */
+  navSeq: number;
   agentDefaults: AgentDefaults;
 
   hydrate: () => Promise<void>;
@@ -268,6 +270,7 @@ export const useStore = create<Store>((set, get) => ({
   selectedDmAgentId: null,
   activeTab: "chat",
   view: "rooms",
+  navSeq: 0,
   agentDefaults: DEFAULT_AGENT_DEFAULTS,
 
   syncError: null,
@@ -329,11 +332,11 @@ export const useStore = create<Store>((set, get) => ({
 
   selectRoom: (roomId) => {
     const firstTaskRoom = get().taskRooms.find((t) => t.roomId === roomId);
-    set({ selectedRoomId: roomId, selectedTaskRoomId: firstTaskRoom?.id ?? null, activeTab: "chat", view: "rooms" });
+    set((s) => ({ selectedRoomId: roomId, selectedTaskRoomId: firstTaskRoom?.id ?? null, activeTab: "chat", view: "rooms", navSeq: s.navSeq + 1 }));
   },
-  selectTaskRoom: (taskRoomId) => set({ selectedTaskRoomId: taskRoomId, activeTab: "chat", view: "rooms" }),
+  selectTaskRoom: (taskRoomId) => set((s) => ({ selectedTaskRoomId: taskRoomId, activeTab: "chat", view: "rooms", navSeq: s.navSeq + 1 })),
   setActiveTab: (tab) => set({ activeTab: tab }),
-  setView: (view) => set({ view }),
+  setView: (view) => set((s) => ({ view, navSeq: s.navSeq + 1 })),
   goToAgentInContext: (agentId) => {
     const agent = get().agents.find((a) => a.id === agentId);
     if (!agent) return;
@@ -342,14 +345,15 @@ export const useStore = create<Store>((set, get) => ({
   openTaskRoom: (taskRoomId, tab = "agents") => {
     const taskRoom = get().taskRooms.find((t) => t.id === taskRoomId);
     if (!taskRoom) return;
-    set({
+    set((s) => ({
       selectedRoomId: taskRoom.roomId,
       selectedTaskRoomId: taskRoom.id,
       activeTab: tab,
       view: "rooms",
-    });
+      navSeq: s.navSeq + 1,
+    }));
   },
-  openAgentDm: (agentId) => set({ selectedDmAgentId: agentId, view: "dm" }),
+  openAgentDm: (agentId) => set((s) => ({ selectedDmAgentId: agentId, view: "dm", navSeq: s.navSeq + 1 })),
 
   setAgentDefaults: (defaults) => {
     set({ agentDefaults: defaults });

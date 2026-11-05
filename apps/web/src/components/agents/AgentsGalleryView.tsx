@@ -48,7 +48,7 @@ export function AgentsGalleryView() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-6">
+    <div className="min-w-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl font-semibold">Agents</h1>
@@ -56,7 +56,7 @@ export function AgentsGalleryView() {
             Every AI Agent across your rooms, in one place. Set up and manage them here.
           </p>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             disabled={taskRooms.length === 0}
             title={taskRooms.length === 0 ? "Create a Task Room first" : undefined}
@@ -87,7 +87,7 @@ export function AgentsGalleryView() {
       ) : (
         <div
           onClick={() => openMenuId && setOpenMenuId(null)}
-          className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4"
+          className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-4 xl:grid-cols-4"
         >
           {agents.map((agent) => {
             const { taskRoom, room } = contextFor(agent);
@@ -96,7 +96,7 @@ export function AgentsGalleryView() {
               <div
                 key={agent.id}
                 onClick={() => goToAgentInContext(agent.id)}
-                className="group relative flex cursor-pointer flex-col items-center rounded-xl border border-border bg-surface p-5 text-center transition-colors hover:border-brand/40"
+                className="group relative flex min-w-0 cursor-pointer flex-col items-center rounded-xl border border-border bg-surface p-5 text-center transition-colors hover:border-brand/40"
               >
                 <button
                   onClick={(e) => {
@@ -170,10 +170,10 @@ export function AgentsGalleryView() {
                   )}
                 </div>
 
-                <p className="mt-3 text-sm font-medium">{agent.name}</p>
-                <p className="text-xs text-foreground-muted">{agent.model}</p>
+                <p className="mt-3 w-full truncate text-sm font-medium">{agent.name}</p>
+                <p className="w-full truncate text-xs text-foreground-muted">{agent.model}</p>
                 {taskRoom && (
-                  <p className="mt-1 truncate text-[11px] text-foreground-muted/80">
+                  <p className="mt-1 w-full truncate text-[11px] text-foreground-muted/80">
                     {room?.emoji} {taskRoom.emoji} {taskRoom.name}
                     {agent.roomId && " · Room-wide"}
                   </p>
@@ -210,7 +210,7 @@ export function AgentsGalleryView() {
 
         <div
           onClick={() => teamMenuOpenId && setTeamMenuOpenId(null)}
-          className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4"
+          className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-4 xl:grid-cols-4"
         >
           {agentTeams.map((team) => {
             const memberAgents = team.agentIds
@@ -222,7 +222,7 @@ export function AgentsGalleryView() {
             return (
               <div
                 key={team.id}
-                className="group relative flex flex-col rounded-xl border border-border bg-surface p-5"
+                className="group @container relative flex min-w-0 flex-col rounded-xl border border-border bg-surface p-5"
               >
                 <button
                   onClick={(e) => {
@@ -262,20 +262,25 @@ export function AgentsGalleryView() {
                   </div>
                 )}
 
+                {/* Smaller avatars when the card is too narrow for the full-size stack. */}
                 <div className="mb-4 flex">
                   {visible.map((agent, i) => (
-                    <div key={agent.id} className={i > 0 ? "-ml-3" : ""} style={{ zIndex: visible.length - i }}>
+                    <div
+                      key={agent.id}
+                      className={`size-10 @[13.5rem]:size-14 [&>div]:size-full! ${i > 0 ? "-ml-3" : ""}`}
+                      style={{ zIndex: visible.length - i }}
+                    >
                       <Avatar label={agent.avatarEmoji} color={agent.color} size={56} />
                     </div>
                   ))}
                   {overflow > 0 && (
-                    <div className="-ml-3 flex h-14 w-14 items-center justify-center rounded-full border-2 border-surface bg-surface-raised text-sm font-medium text-foreground-muted">
+                    <div className="-ml-3 flex size-10 shrink-0 items-center @[13.5rem]:size-14 justify-center rounded-full border-2 border-surface bg-surface-raised text-sm font-medium text-foreground-muted">
                       +{overflow}
                     </div>
                   )}
                 </div>
 
-                <p className="text-sm font-semibold">{team.name}</p>
+                <p className="truncate text-sm font-semibold">{team.name}</p>
                 <p className="text-xs text-foreground-muted">{MODE_LABEL[team.mode]}</p>
               </div>
             );

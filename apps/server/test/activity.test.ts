@@ -84,3 +84,35 @@ test("a room turn's activity is shared with the room; stopping leaves a trace th
   release.shift()?.();
   await waitFor(() => s.db.prepare("SELECT 1 FROM messages WHERE author_id = ? AND content = 'Done.'").get(agentId));
 });
+
+test("a member who reaches the agent only via a Room attachment can stop their own DM turn, not its home room's turn", async () => {
+  // m-c is in room-c, which the agent is attached to — not in its home task room tr-a.
+  addMember(s, "m-c", "member", "c");
+  s.db.prepare(`INSERT INTO rooms (id, name, emoji, member_ids) VALUES ('room-c','C','c','["m-owner","m-c"]')`).run();
+  s.db.prepare("UPDATE agents SET room_id = 'room-c' WHERE id = ?").run(agentId);
+  const stop = () => s.req(`/api/agents/${agentId}/stop`, { method: "POST", as: "c" });
+  const dmTraces = () => s.db.prepare("SELECT COUNT(*) n FROM direct_messages WHERE member_id = 'm-c' AND meta IS NOT NULL").get() as { n: number };
+
+  // Their DM turn: stoppable.
+  await s.req(`/api/agents/${agentId}/dm`, { method: "POST", as: "c", body: JSON.stringify({ content: "hi" }) });
+  await waitFor(() => release.length > 0);
+  assert.deepEqual((await agentAs("c")).activeTurn, { dm: true });
+  assert.equal((await stop()).status, 200);
+  await waitFor(() => dmTraces().n > 0);
+  assert.equal((await agentAs("c")).activeTurn, undefined);
+  release.shift()?.();
+
+  // The home room's turn: not stoppable by them (nor via stop-all).
+  const n = mock.requests.length;
+  const done = () => (s.db.prepare("SELECT COUNT(*) n FROM messages WHERE author_id = ? AND content = 'Done.'").get(agentId) as { n: number }).n;
+  const doneBefore = done();
+  await s.req("/api/task-rooms/tr-a/messages", { method: "POST", as: "a", body: JSON.stringify({ content: "@Worker home" }) });
+  await waitFor(() => mock.requests.length > n && release.length > 0);
+  assert.equal((await stop()).status, 200);
+  assert.equal((await s.req("/api/agents/stop-all", { method: "POST", as: "c" })).status, 200);
+  assert.deepEqual((await agentAs("a")).activeTurn, { taskRoomId: "tr-a" });
+  assert.equal((await agentAs("a")).status, "running");
+  release.shift()?.();
+  await waitFor(() => done() > doneBefore);
+  s.db.prepare("UPDATE agents SET room_id = NULL WHERE id = ?").run(agentId);
+});

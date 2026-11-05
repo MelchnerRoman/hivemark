@@ -41,7 +41,7 @@ export function ChatPane({ taskRoomId }: { taskRoomId: string }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={ref} onScroll={onScroll} className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+      <div ref={ref} onScroll={onScroll} className="flex-1 space-y-4 overflow-y-auto px-4 py-4 md:px-6">
         {messages.map((m) => {
           const a = author(m.authorType, m.authorId);
           // Optimistic (tmp-) messages don't exist server-side yet.
@@ -69,7 +69,7 @@ export function ChatPane({ taskRoomId }: { taskRoomId: string }) {
             name={a.name}
             avatarEmoji={a.avatarEmoji}
             color={a.color}
-            // The stop route takes members of the agent's home task room.
+            // Room turns are stoppable by members of the agent's home task room only.
             onStop={taskRooms.some((t) => t.id === a.taskRoomId) ? () => stopAgent(a.id) : undefined}
           />
         ))}
@@ -167,7 +167,7 @@ function ChatComposer({ taskRoomId, roomId }: { taskRoomId: string; roomId: stri
         e.preventDefault();
         void uploadFiles([...e.dataTransfer.files]);
       }}
-      className="relative flex items-end gap-2 border-t border-border p-4"
+      className="relative flex items-end gap-2 border-t border-border p-3 md:p-4"
     >
       {(pendingAttachments.length > 0 || uploading) && (
         <div className="absolute bottom-full left-4 right-4 mb-1 flex flex-wrap gap-1.5">
@@ -242,8 +242,9 @@ function ChatComposer({ taskRoomId, roomId }: { taskRoomId: string; roomId: stri
           }
         }}
         aria-label="Message"
-        placeholder="Message this task room… (@ to mention an agent, Shift+Enter for a new line, paste or drop files)"
-        className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
+        placeholder="Message… (@ to mention)"
+        title="Enter sends, Shift+Enter adds a new line. Paste or drop files to attach them."
+        className="min-w-0 flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
       />
       <Button type="submit" disabled={!canSend}>
         Send

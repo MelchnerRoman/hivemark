@@ -23,7 +23,8 @@ const TABS: { id: WorkspaceTab; label: string; icon: string }[] = [
   { id: "preview", label: "Preview", icon: "🌐" },
 ];
 
-export function TaskRoomWorkspace() {
+/** `onOpenTaskList`: below lg the Task Room list is a drawer, opened from here. */
+export function TaskRoomWorkspace({ taskListOpen, onOpenTaskList }: { taskListOpen: boolean; onOpenTaskList: () => void }) {
   const taskRoom = useStore((s) => s.taskRooms.find((t) => t.id === s.selectedTaskRoomId));
   const members = useStore((s) => s.members);
   const activeTab = useStore((s) => s.activeTab);
@@ -33,10 +34,24 @@ export function TaskRoomWorkspace() {
   const loops = useStore((s) => s.loops);
   const todos = useStore((s) => s.todos);
 
+  const taskListButton = (
+    <button
+      onClick={onOpenTaskList}
+      aria-label="Show Task Rooms"
+      aria-haspopup="dialog"
+      aria-expanded={taskListOpen}
+      title="Task Rooms"
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-foreground-muted hover:bg-surface-raised hover:text-foreground lg:hidden"
+    >
+      🗂️
+    </button>
+  );
+
   if (!taskRoom) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-foreground-muted">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-foreground-muted">
         Select a Task Room, or create one, to open its workspace.
+        {taskListButton}
       </div>
     );
   }
@@ -57,11 +72,12 @@ export function TaskRoomWorkspace() {
   };
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
-      <header className="flex items-center justify-between border-b border-border px-6 py-4">
-        <div>
+    <div className="@container flex min-w-0 flex-1 flex-col">
+      <header className="flex items-center gap-3 border-b border-border px-4 py-4 md:px-6">
+        {taskListButton}
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h2 className="font-display text-base font-semibold">
+            <h2 className="truncate font-display text-base font-semibold">
               {taskRoom.emoji} {taskRoom.name}
             </h2>
             <Badge tone={TASK_ROOM_STATUS_TONE[taskRoom.status]}>{TASK_ROOM_STATUS_LABEL[taskRoom.status]}</Badge>
@@ -79,14 +95,16 @@ export function TaskRoomWorkspace() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-lg px-3 py-2 text-sm font-medium transition-colors ${
+            title={tab.label}
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-lg px-2.5 py-2 @3xl:px-3 text-sm font-medium transition-colors ${
               activeTab === tab.id
                 ? "border-b-2 border-brand text-brand"
                 : "text-foreground-muted hover:text-foreground"
             }`}
           >
-            <span>{tab.icon}</span>
-            {tab.label}
+            <span aria-hidden>{tab.icon}</span>
+            {/* Icons only while the workspace is too narrow for all seven labels. */}
+            <span className="sr-only @3xl:not-sr-only">{tab.label}</span>
             {counts[tab.id] != null && (
               <span className="ml-0.5 rounded-full bg-surface-raised px-1.5 text-xs text-foreground-muted">
                 {counts[tab.id]}

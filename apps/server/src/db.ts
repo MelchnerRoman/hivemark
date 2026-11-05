@@ -967,7 +967,11 @@ export const repo = {
       messageAuthors,
       agentTeams: isOwner
         ? full.agentTeams
-        : full.agentTeams.map((t) => ({ ...t, agentIds: t.agentIds.filter((id) => visibleAgentIds.has(id)) })),
+        : full.agentTeams
+            .map((t) => ({ ...t, agentIds: t.agentIds.filter((id) => visibleAgentIds.has(id)), hadAgents: t.agentIds.length > 0 }))
+            // A team made only of agents the member can't see would render as an empty card.
+            .filter(({ hadAgents, agentIds }) => !hadAgents || agentIds.length > 0)
+            .map(({ hadAgents: _, ...t }) => t),
       // Last 4 chars of the owner's keys are theirs alone; members just see connected.
       connections: isOwner ? full.connections : full.connections.map((c) => ({ ...c, hint: null })),
       directMessages,

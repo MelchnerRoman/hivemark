@@ -351,9 +351,11 @@ function conversationKey(turn: Turn) {
  * the spawned CLI; the turn ends without posting a reply), and drops any
  * turns queued behind it. With `memberId`, only what that member may stop:
  * Room turns (shared work) and their own DMs — other members' DM turns run
- * on. Returns true if a turn it wasn't allowed to stop is still running. */
-export function stopAgentTurn(agentId: string, memberId?: string): boolean {
-  const stoppable = (t: Turn) => !memberId || t.kind !== "dm" || t.memberId === memberId;
+ * on; `dmOnly` (a member who reaches the agent only through a Room
+ * attachment) leaves Room turns running too. Returns true if a turn it
+ * wasn't allowed to stop is still running. */
+export function stopAgentTurn(agentId: string, memberId?: string, dmOnly = false): boolean {
+  const stoppable = (t: Turn) => !memberId || (t.kind === "dm" ? t.memberId === memberId : !dmOnly);
   const kept = (queuedTurns.get(agentId) ?? []).filter((t) => !stoppable(t));
   if (kept.length) queuedTurns.set(agentId, kept);
   else queuedTurns.delete(agentId);

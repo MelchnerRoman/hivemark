@@ -158,10 +158,10 @@ describe("auth enabled (multi-user)", () => {
       assert.equal(anthropic(st).connected, true);
       assert.ok(st.connections.every((c: { hint: string | null }) => c.hint === null));
     }
-    const team = (st: { agentTeams: { id: string; agentIds: string[] }[] }) => st.agentTeams.find((t) => t.id === "team-mixed")!;
-    assert.deepEqual(team(own).agentIds, [agentId]);
-    assert.deepEqual(team(inS).agentIds, [agentId]);
-    assert.deepEqual(team(out).agentIds, []);
+    const team = (st: { agentTeams: { id: string; agentIds: string[] }[] }) => st.agentTeams.find((t) => t.id === "team-mixed");
+    assert.deepEqual(team(own)?.agentIds, [agentId]);
+    assert.deepEqual(team(inS)?.agentIds, [agentId]);
+    assert.equal(team(out), undefined, "a team of only invisible agents is left out");
     s.db.prepare("DELETE FROM agent_teams WHERE id = 'team-mixed'").run();
   });
 

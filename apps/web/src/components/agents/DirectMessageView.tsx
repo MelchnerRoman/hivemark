@@ -20,8 +20,6 @@ export function DirectMessageView() {
   const goToAgentInContext = useStore((s) => s.goToAgentInContext);
   const me = useStore((s) => s.members.find((m) => m.id === s.currentMemberId));
   const stopAgent = useStore((s) => s.stopAgent);
-  // The stop route takes members of the agent's home task room.
-  const canStop = useStore((s) => s.taskRooms.some((t) => t.id === agent?.taskRoomId));
   const working = !!agent?.activeTurn && "dm" in agent.activeTurn;
   const [editingId, setEditingId] = useState<string | null>(null);
   const { ref, onScroll } = useStickToBottom(messages, agentId ?? "", working);
@@ -37,8 +35,8 @@ export function DirectMessageView() {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <header className="flex items-center justify-between border-b border-border px-6 py-4">
-        <div className="flex items-center gap-3">
+      <header className="flex items-center justify-between border-b border-border px-4 py-4 md:px-6">
+        <div className="flex min-w-0 items-center gap-3">
           <Avatar label={agent.avatarEmoji} color={agent.color} size={32} />
           <div>
             <div className="flex items-center gap-2">
@@ -54,11 +52,11 @@ export function DirectMessageView() {
           </div>
         </div>
       </header>
-      <div className="border-b border-border px-6 py-3">
+      <div className="border-b border-border px-4 py-3 md:px-6">
         <AgentFiles key={agent.id} agentId={agent.id} dm title="Files from this chat (only you can see them)" />
       </div>
 
-      <div ref={ref} onScroll={onScroll} className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+      <div ref={ref} onScroll={onScroll} className="flex-1 space-y-4 overflow-y-auto px-4 py-4 md:px-6">
         {messages.map((m) => {
           const isAgent = m.authorType === "agent";
           // Optimistic (tmp-) messages don't exist server-side yet.
@@ -84,7 +82,8 @@ export function DirectMessageView() {
             name={agent.name}
             avatarEmoji={agent.avatarEmoji}
             color={agent.color}
-            onStop={canStop ? () => stopAgent(agent.id) : undefined}
+            // Anyone who can DM the agent may stop their own DM turn.
+            onStop={() => stopAgent(agent.id)}
           />
         )}
         {messages.length === 0 && !working && (
@@ -112,13 +111,13 @@ function DmComposer({ agentId, agentName }: { agentId: string; agentName: string
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex gap-2 border-t border-border p-4">
+    <form onSubmit={handleSubmit} className="flex gap-2 border-t border-border p-3 md:p-4">
       <input
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         aria-label={`Message ${agentName}`}
         placeholder={`Message ${agentName}…`}
-        className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
+        className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
       />
       <Button type="submit" disabled={!draft.trim()}>
         Send
