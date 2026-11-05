@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import {
   createRoomFile,
@@ -28,6 +28,20 @@ function joinPath(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }
 
+/** What the inline strip above the listing is asking for. */
+type Ask =
+  | { kind: "dir" | "file" }
+  | { kind: "rename" | "delete"; entry: DirEntry }
+  | { kind: "replace"; files: File[]; clashes: string[] };
+/** [name field label, submit button] per Ask kind. */
+const ASK_TEXT: Record<Ask["kind"], [string, string]> = {
+  dir: ["New folder name", "Create folder"],
+  file: ["New file name", "Create file"],
+  rename: ["Rename to", "Rename"],
+  delete: ["", "Delete"],
+  replace: ["", "Replace"],
+};
+
 /** The real Finder — folder-by-folder navigation over a Room's shared
  * project, the collaborative workspace every agent (and human) in the Room
  * reads and writes together. */
@@ -38,11 +52,15 @@ function ProjectFinder({ roomId }: { roomId: string }) {
   const [previewContent, setPreviewContent] = useState<FileContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
+  const [ask, setAsk] = useState<Ask | null>(null);
+  const [askName, setAskName] = useState("");
 
   function refresh() {
-    setError(null);
     listRoomFiles(roomId, currentDir)
-      .then(setEntries)
+      .then((list) => {
+        setEntries(list);
+        setError(null);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }
 
@@ -74,46 +92,90 @@ function ProjectFinder({ roomId }: { roomId: string }) {
     }
   }
 
-  async function handleNewFolder() {
-    const name = window.prompt("New folder name:");
-    if (!name) return;
-    await run(createRoomFile(roomId, joinPath(currentDir, name), "dir"));
+  function askFor(next: Ask) {
+    setAsk(next);
+    setAskName(next.kind === "rename" ? next.entry.name : "");
   }
 
-  async function handleNewFile() {
-    const name = window.prompt("New file name:");
-    if (!name) return;
-    await run(createRoomFile(roomId, joinPath(currentDir, name), "file"));
-  }
-
-  async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
-    const files = [...(e.target.files ?? [])].filter(
-      // The server refuses to overwrite unless told to — ask first.
-      (file) => !entries?.some((x) => x.name === file.name) || window.confirm(`Replace existing "${file.name}"?`)
-    );
-    e.target.value = "";
-    await run(
+  function upload(files: File[]) {
+    // overwrite: only new names, or ones the user just confirmed replacing, remain.
+    return run(
       (async () => {
-        // overwrite: only new names, or ones the user just confirmed replacing, remain.
         for (const file of files) await uploadRoomFile(roomId, joinPath(currentDir, file.name), file, true);
       })()
     );
   }
 
-  async function handleDelete(entry: DirEntry) {
-    const path = joinPath(currentDir, entry.name);
-    if (!window.confirm(`Delete "${entry.name}"? This can't be undone.`)) return;
-    await run(deleteRoomFile(roomId, path));
-    if (previewPath === path) {
-      setPreviewPath(null);
-      setPreviewContent(null);
+  async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
+    const files = [...(e.target.files ?? [])];
+    e.target.value = "";
+    // The server refuses to overwrite unless told to — ask first.
+    const clashes = files.filter((file) => entries?.some((x) => x.name === file.name)).map((f) => f.name);
+    if (clashes.length) askFor({ kind: "replace", files, clashes });
+    else await upload(files);
+  }
+
+  async function handleAsk(e: SyntheticEvent, skipClashes = false) {
+    e.preventDefault();
+    if (!ask) return;
+    const name = askName.trim();
+    setAsk(null);
+    if (ask.kind === "replace") {
+      await upload(skipClashes ? ask.files.filter((f) => !ask.clashes.includes(f.name)) : ask.files);
+    } else if (ask.kind === "delete") {
+      const path = joinPath(currentDir, ask.entry.name);
+      await run(deleteRoomFile(roomId, path));
+      if (previewPath === path) {
+        setPreviewPath(null);
+        setPreviewContent(null);
+      }
+    } else if (ask.kind === "rename") {
+      if (name && name !== ask.entry.name) {
+        await run(renameRoomFile(roomId, joinPath(currentDir, ask.entry.name), joinPath(currentDir, name)));
+      }
+    } else if (name) {
+      await run(createRoomFile(roomId, joinPath(currentDir, name), ask.kind));
     }
   }
 
-  async function handleRename(entry: DirEntry) {
-    const newName = window.prompt("Rename to:", entry.name);
-    if (!newName || newName === entry.name) return;
-    await run(renameRoomFile(roomId, joinPath(currentDir, entry.name), joinPath(currentDir, newName)));
+  /** Inline replacement for prompt()/confirm(): a name field or a yes/no. */
+  function askStrip() {
+    if (!ask) return null;
+    const danger = ask.kind === "delete" || ask.kind === "replace";
+    return (
+      <form
+        onSubmit={handleAsk}
+        className={`mt-2 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
+          danger ? "border-danger/30 bg-danger-soft text-danger" : "border-border bg-surface-raised"
+        }`}
+      >
+        {ask.kind === "delete" && <span className="mr-auto">Delete &quot;{ask.entry.name}&quot;? This can&apos;t be undone.</span>}
+        {ask.kind === "replace" && (
+          <span className="mr-auto">Replace existing {ask.clashes.map((n) => `"${n}"`).join(", ")}?</span>
+        )}
+        {!danger && (
+          <input
+            autoFocus
+            aria-label={ASK_TEXT[ask.kind][0]}
+            placeholder={ASK_TEXT[ask.kind][0]}
+            value={askName}
+            onChange={(e) => setAskName(e.target.value)}
+            className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-brand"
+          />
+        )}
+        <Button type="button" variant="ghost" onClick={() => setAsk(null)}>
+          Cancel
+        </Button>
+        {ask.kind === "replace" && ask.clashes.length < ask.files.length && (
+          <Button type="button" variant="secondary" onClick={(e) => handleAsk(e, true)}>
+            Skip existing
+          </Button>
+        )}
+        <Button type="submit" variant={danger ? "danger" : "primary"} disabled={!danger && !askName.trim()}>
+          {ASK_TEXT[ask.kind][1]}
+        </Button>
+      </form>
+    );
   }
 
   const crumbs = currentDir ? currentDir.split("/") : [];
@@ -142,10 +204,10 @@ function ProjectFinder({ roomId }: { roomId: string }) {
           <Button variant="secondary" className="text-xs" onClick={() => uploadInput.current?.click()}>
             Upload
           </Button>
-          <Button variant="secondary" className="text-xs" onClick={handleNewFolder}>
+          <Button variant="secondary" className="text-xs" onClick={() => askFor({ kind: "dir" })}>
             New folder
           </Button>
-          <Button variant="secondary" className="text-xs" onClick={handleNewFile}>
+          <Button variant="secondary" className="text-xs" onClick={() => askFor({ kind: "file" })}>
             New file
           </Button>
           <Button variant="secondary" className="text-xs" onClick={refresh}>
@@ -154,38 +216,39 @@ function ProjectFinder({ roomId }: { roomId: string }) {
         </div>
       </div>
 
+      {ask && !("entry" in ask) && <div className="mb-3">{askStrip()}</div>}
       {error && <p className="mb-2 text-sm text-danger">{error}</p>}
 
       <div className="space-y-1">
         {entries?.length === 0 && <p className="py-6 text-center text-sm text-foreground-muted">Empty folder.</p>}
         {entries?.map((entry) => (
-          <div
-            key={entry.name}
-            className="flex items-center justify-between rounded-lg border border-border bg-surface px-3 py-2"
-          >
-            <button onClick={() => openEntry(entry)} className="flex flex-1 items-center gap-2 text-left text-sm">
-              <span>{entry.type === "dir" ? "📁" : "📄"}</span>
-              <span className="font-medium">{entry.name}</span>
-              {entry.type === "file" && (
-                <span className="text-xs text-foreground-muted">{formatSize(entry.size)}</span>
-              )}
-            </button>
-            <div className="flex gap-1 text-xs">
-              {entry.type === "file" && (
-                <button
-                  onClick={() => downloadRoomFile(roomId, joinPath(currentDir, entry.name))}
-                  className="text-foreground-muted hover:text-brand"
-                >
-                  Download
+          <div key={entry.name} className="rounded-lg border border-border bg-surface px-3 py-2">
+            <div className="flex items-center justify-between">
+              <button onClick={() => openEntry(entry)} className="flex flex-1 items-center gap-2 text-left text-sm">
+                <span>{entry.type === "dir" ? "📁" : "📄"}</span>
+                <span className="font-medium">{entry.name}</span>
+                {entry.type === "file" && (
+                  <span className="text-xs text-foreground-muted">{formatSize(entry.size)}</span>
+                )}
+              </button>
+              <div className="flex gap-1 text-xs">
+                {entry.type === "file" && (
+                  <button
+                    onClick={() => downloadRoomFile(roomId, joinPath(currentDir, entry.name))}
+                    className="text-foreground-muted hover:text-brand"
+                  >
+                    Download
+                  </button>
+                )}
+                <button onClick={() => askFor({ kind: "rename", entry })} className="text-foreground-muted hover:text-brand">
+                  Rename
                 </button>
-              )}
-              <button onClick={() => handleRename(entry)} className="text-foreground-muted hover:text-brand">
-                Rename
-              </button>
-              <button onClick={() => handleDelete(entry)} className="text-foreground-muted hover:text-danger">
-                Delete
-              </button>
+                <button onClick={() => askFor({ kind: "delete", entry })} className="text-foreground-muted hover:text-danger">
+                  Delete
+                </button>
+              </div>
             </div>
+          {ask && "entry" in ask && ask.entry.name === entry.name && askStrip()}
           </div>
         ))}
       </div>

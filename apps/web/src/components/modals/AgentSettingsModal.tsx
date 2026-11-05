@@ -89,6 +89,11 @@ function AgentSettingsBody() {
         <p className="mt-1 text-sm text-foreground-muted">
           Control how agents behave in conversations and run on this machine.
         </p>
+        {!isOwner && (
+          <p className="mt-2 rounded-lg bg-surface-raised px-3 py-2 text-xs text-foreground-muted">
+            Only the workspace owner can change these settings.
+          </p>
+        )}
         <div className="mt-4 space-y-3">
           <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
             <div>
@@ -102,6 +107,7 @@ function AgentSettingsBody() {
               checked={behavior.keepAddressedAgentsActive}
               onChange={(v) => setAgentBehaviorSetting("keepAddressedAgentsActive", v)}
               label="Keep addressed agents active"
+              disabled={!isOwner}
             />
           </div>
           <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
@@ -116,6 +122,7 @@ function AgentSettingsBody() {
               checked={behavior.keepAwakeWhileAgentsActive}
               onChange={(v) => setAgentBehaviorSetting("keepAwakeWhileAgentsActive", v)}
               label="Keep awake while agents are active"
+              disabled={!isOwner}
             />
           </div>
         </div>
@@ -134,14 +141,14 @@ function AgentSettingsBody() {
                   {runtime.status === "cli_needed" && <Badge tone="warning">CLI needed</Badge>}
                   {runtime.status === "ready" && <Badge tone="accent">Ready</Badge>}
                 </div>
-                {runtime.status === "cli_needed" && (
+                {runtime.status === "cli_needed" && isOwner && (
                   <Button variant="secondary" onClick={() => installRuntime(runtime.id)}>
                     Install
                   </Button>
                 )}
               </div>
               <p className="mt-1.5 text-xs text-foreground-muted">{runtime.description}</p>
-              {runtime.id === "runtime-claude-code" && <ClaudeCodeSignIn />}
+              {runtime.id === "runtime-claude-code" && <ClaudeCodeSignIn isOwner={isOwner} />}
               {runtime.installHint && (
                 <code className="mt-1.5 block rounded bg-surface-raised px-2 py-1 text-xs text-foreground-muted">
                   {runtime.installHint}
@@ -160,14 +167,16 @@ function AgentSettingsBody() {
             </div>
           ))}
         </div>
-        <button
-          type="button"
-          disabled
-          title="Custom runtimes aren't supported yet"
-          className="mt-3 flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-foreground-muted opacity-60"
-        >
-          <span>+</span> Add runtimes
-        </button>
+        {isOwner && (
+          <button
+            type="button"
+            disabled
+            title="Custom runtimes aren't supported yet"
+            className="mt-3 flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-foreground-muted opacity-60"
+          >
+            <span>+</span> Add runtimes
+          </button>
+        )}
       </section>
 
       <section>
@@ -204,7 +213,7 @@ function AgentSettingsBody() {
                     </Button>
                   </div>
                 )}
-                {tool.status === "needs_setup" && (
+                {tool.status === "needs_setup" && isOwner && (
                   <Button
                     variant="secondary"
                     disabled={installingToolId === tool.id}
@@ -254,36 +263,41 @@ function AgentSettingsBody() {
       </section>
 
       <section>
-        <form onSubmit={handleSaveDefaults} className="space-y-4">
-          <div>
-            <h3 className="font-display text-base font-semibold">Agent defaults</h3>
-            <p className="mt-1 text-sm text-foreground-muted">
-              Runtime, model, and instructions inherited by new agents. Agent-specific settings always take priority.
-            </p>
-          </div>
-          <RuntimeSelect value={runtimeId} onChange={handleRuntimeChange} label="Default runtime" />
-          <ModelInput runtimeId={runtimeId} value={model} onChange={setModel} label="Default model" />
-          <p className="-mt-2.5 text-xs text-foreground-muted">Saved changes take effect on new agents.</p>
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-foreground-muted">
-              Default instructions template
-            </label>
-            <textarea
-              aria-label="Default instructions template"
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
-              placeholder="e.g. Always summarize findings back to the task room chat before finishing."
-              rows={3}
-              className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
-            />
-          </div>
-          <div className="sticky bottom-0 flex justify-end bg-surface py-1">
-            <Button type="submit">Save defaults</Button>
-          </div>
+        {/* a disabled fieldset natively disables every control in it */}
+        <form onSubmit={handleSaveDefaults}>
+          <fieldset disabled={!isOwner} className="min-w-0 space-y-4">
+            <div>
+              <h3 className="font-display text-base font-semibold">Agent defaults</h3>
+              <p className="mt-1 text-sm text-foreground-muted">
+                Runtime, model, and instructions inherited by new agents. Agent-specific settings always take priority.
+              </p>
+            </div>
+            <RuntimeSelect value={runtimeId} onChange={handleRuntimeChange} label="Default runtime" />
+            <ModelInput runtimeId={runtimeId} value={model} onChange={setModel} label="Default model" />
+            <p className="-mt-2.5 text-xs text-foreground-muted">Saved changes take effect on new agents.</p>
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-foreground-muted">
+                Default instructions template
+              </label>
+              <textarea
+                aria-label="Default instructions template"
+                value={instructions}
+                onChange={(e) => setInstructions(e.target.value)}
+                placeholder="e.g. Always summarize findings back to the task room chat before finishing."
+                rows={3}
+                className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
+              />
+            </div>
+            {isOwner && (
+              <div className="sticky bottom-0 flex justify-end bg-surface py-1">
+                <Button type="submit">Save defaults</Button>
+              </div>
+            )}
+          </fieldset>
         </form>
       </section>
 
-      <ConnectionsSection />
+      <ConnectionsSection isOwner={isOwner} />
     </div>
   );
 }
@@ -297,7 +311,7 @@ const CONNECTION_HELP: Record<string, string> = {
   linear: "Personal API key for the Linear tool.",
 };
 
-function ClaudeCodeSignIn() {
+function ClaudeCodeSignIn({ isOwner }: { isOwner: boolean }) {
   const [status, setStatus] = useState<ClaudeCodeAuthStatus | null>(null);
   const [waiting, setWaiting] = useState(false);
 
@@ -332,7 +346,9 @@ function ClaudeCodeSignIn() {
   return (
     <div className="mt-1.5 flex items-center gap-2">
       {status.loggedIn ? (
-        <Badge tone="accent">Signed in as {status.email}</Badge>
+        <Badge tone="accent">{status.email ? `Signed in as ${status.email}` : "Signed in"}</Badge>
+      ) : !isOwner ? (
+        <Badge tone="neutral">Not signed in</Badge>
       ) : (
         <Button variant="secondary" disabled={waiting} onClick={handleSignIn}>
           {waiting ? "Waiting for browser…" : "Sign in with Claude"}
@@ -342,7 +358,7 @@ function ClaudeCodeSignIn() {
   );
 }
 
-function ConnectionsSection() {
+function ConnectionsSection({ isOwner }: { isOwner: boolean }) {
   const [connections, setConnections] = useState<ConnectionStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -413,12 +429,12 @@ function ConnectionsSection() {
               <div className="flex items-center gap-2.5">
                 <span className="text-sm font-medium">{conn.label}</span>
                 {conn.connected ? (
-                  <Badge tone="accent">Connected · ···{conn.hint}</Badge>
+                  <Badge tone="accent">{conn.hint ? `Connected · ···${conn.hint}` : "Connected"}</Badge>
                 ) : (
                   <Badge tone="neutral">Not connected</Badge>
                 )}
               </div>
-              {conn.connected && (
+              {conn.connected && isOwner && (
                 <Button
                   variant="danger"
                   disabled={savingKey === conn.key}
@@ -429,23 +445,25 @@ function ConnectionsSection() {
               )}
             </div>
             <p className="mt-1.5 text-xs text-foreground-muted">{CONNECTION_HELP[conn.key]}</p>
-            <div className="mt-2 flex gap-2">
-              <input
-                aria-label={`${conn.label} key`}
-                type="password"
-                value={drafts[conn.key] ?? ""}
-                onChange={(e) => setDrafts((d) => ({ ...d, [conn.key]: e.target.value }))}
-                placeholder={conn.connected ? "Enter a new value to replace it" : "Paste key or token"}
-                className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-brand"
-              />
-              <Button
-                variant="secondary"
-                disabled={savingKey === conn.key || !(drafts[conn.key] ?? "").trim()}
-                onClick={() => handleSave(conn.key)}
-              >
-                Save
-              </Button>
-            </div>
+            {isOwner && (
+              <div className="mt-2 flex gap-2">
+                <input
+                  aria-label={conn.label}
+                  type="password"
+                  value={drafts[conn.key] ?? ""}
+                  onChange={(e) => setDrafts((d) => ({ ...d, [conn.key]: e.target.value }))}
+                  placeholder={conn.connected ? "Enter a new value to replace it" : "Paste key or token"}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-brand"
+                />
+                <Button
+                  variant="secondary"
+                  disabled={savingKey === conn.key || !(drafts[conn.key] ?? "").trim()}
+                  onClick={() => handleSave(conn.key)}
+                >
+                  Save
+                </Button>
+              </div>
+            )}
           </div>
         ))}
       </div>

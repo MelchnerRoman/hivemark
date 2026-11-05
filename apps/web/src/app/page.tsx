@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { refresh, useStore } from "@/lib/store";
 import { BACKEND_URL, connectSync, exchangeAuthCode } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
@@ -121,6 +121,7 @@ export default function Home() {
           Lost connection to the Hivemark backend — reconnecting… Changes made now may not be saved.
         </div>
       )}
+      <ActionErrorToast />
       <div className="flex min-h-0 w-full flex-1">
         <RoomSidebar />
         {view === "agents" && <AgentsGalleryView />}
@@ -132,6 +133,37 @@ export default function Home() {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** A failed action's error. A manual popover so it renders in the top layer,
+ * above any open modal <dialog>; auto-hides since a modal makes it inert. */
+function ActionErrorToast() {
+  const error = useStore((s) => s.actionError);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.matches(":popover-open")) el.hidePopover();
+    if (!error) return;
+    el.showPopover(); // re-shown so it stacks above a modal opened since
+    const timer = setTimeout(() => useStore.setState({ actionError: null }), 6000);
+    return () => clearTimeout(timer);
+  }, [error]);
+
+  return (
+    <div
+      ref={ref}
+      popover="manual"
+      role="alert"
+      className="inset-auto bottom-4 left-1/2 m-0 flex max-w-md -translate-x-1/2 items-start gap-3 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger shadow-xl [&:not(:popover-open)]:hidden"
+    >
+      <span className="mr-auto">{error}</span>
+      <button onClick={() => useStore.setState({ actionError: null })} aria-label="Dismiss" className="text-xs">
+        ✕
+      </button>
     </div>
   );
 }

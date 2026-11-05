@@ -15,6 +15,13 @@ import type { Agent } from "@/lib/types";
 
 const BASH_ACCESS_TOOL_ID = "bash-access";
 const BASH_CAPABLE_RUNTIMES = ["runtime-claude-code", "runtime-codex"];
+/** Grants that run real code on this machine — confirmed inline first. */
+const GRANT_WARNINGS: Record<string, (agentName: string) => string> = {
+  "mcp-preview": (name) =>
+    `This lets ${name} run a real npm install + dev server on this machine, confined to this room's project folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`,
+  [BASH_ACCESS_TOOL_ID]: (name) =>
+    `This lets ${name} run real shell commands and edit files on this machine, confined to its own workspace folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`,
+};
 
 export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
   const agents = useStore(useShallow((s) => s.agents));
@@ -27,6 +34,12 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [confirmGrant, setConfirmGrant] = useState<{ agentId: string; toolId: string } | null>(null);
+
+  function toggleTool(agent: Agent, toolId: string, granted: boolean) {
+    if (granted || !GRANT_WARNINGS[toolId]) toggleAgentTool(agent.id, toolId);
+    else setConfirmGrant({ agentId: agent.id, toolId });
+  }
 
   return (
     <div className="h-full overflow-y-auto px-6 py-4">
@@ -104,15 +117,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                     const key = `${agent.id}:${tool.id}`;
                     const isExpanded = expandedTool === key;
                     const grantTool = () => {
-                      if (
-                        granted ||
-                        tool.id !== "mcp-preview" ||
-                        window.confirm(
-                          `This lets ${agent.name} run a real npm install + dev server on this machine, confined to this room's project folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`
-                        )
-                      ) {
-                        toggleAgentTool(agent.id, tool.id);
-                      }
+                      toggleTool(agent, tool.id, granted);
                       setExpandedTool(null);
                     };
                     return (
@@ -163,16 +168,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                     const granted = agent.grants.some((g) => g.toolId === BASH_ACCESS_TOOL_ID);
                     return (
                       <button
-                        onClick={() => {
-                          if (
-                            granted ||
-                            window.confirm(
-                              `This lets ${agent.name} run real shell commands and edit files on this machine, confined to its own workspace folder. It only takes effect if the server operator has also enabled agent tool access. Continue?`
-                            )
-                          ) {
-                            toggleAgentTool(agent.id, BASH_ACCESS_TOOL_ID);
-                          }
-                        }}
+                        onClick={() => toggleTool(agent, BASH_ACCESS_TOOL_ID, granted)}
                         className={`rounded-full border py-1 px-2.5 text-xs font-medium transition-colors ${
                           granted
                             ? "border-danger/40 bg-danger-soft text-danger"
@@ -183,6 +179,24 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                       </button>
                     );
                   })()}
+                </div>
+              )}
+
+              {confirmGrant?.agentId === agent.id && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger">
+                  <span className="mr-auto">{GRANT_WARNINGS[confirmGrant.toolId](agent.name)}</span>
+                  <Button variant="ghost" onClick={() => setConfirmGrant(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="danger"
+                    onClick={() => {
+                      toggleAgentTool(agent.id, confirmGrant.toolId);
+                      setConfirmGrant(null);
+                    }}
+                  >
+                    Grant access
+                  </Button>
                 </div>
               )}
             </div>

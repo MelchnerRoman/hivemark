@@ -31,8 +31,10 @@ export function Modal({
     if (open && !dialog.open) {
       dialog.showModal();
       // showModal() focuses the first focusable (the ✕ button); start on the
-      // first field instead, as the forms' autoFocus intended.
-      dialog.querySelector<HTMLElement>("input:not([type=hidden]):not([hidden]), textarea, select")?.focus();
+      // first field instead, as the forms' autoFocus intended — unless it's
+      // below the fold, where focusing would open the modal scrolled down.
+      const field = dialog.querySelector<HTMLElement>("input:not([type=hidden]):not([hidden]), textarea, select");
+      if (field && field.getBoundingClientRect().bottom <= dialog.getBoundingClientRect().bottom) field.focus();
     }
     if (!open && dialog.open) dialog.close();
   }, [open]);

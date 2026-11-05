@@ -2,7 +2,7 @@
 
 import { FormEvent, KeyboardEvent, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useStore } from "@/lib/store";
+import { showError, useStore } from "@/lib/store";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { uploadRoomFile } from "@/lib/api";
@@ -104,7 +104,7 @@ function ChatComposer({ taskRoomId, roomId }: { taskRoomId: string; roomId: stri
         setPendingAttachments((a) => [...a, path]);
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      showError(err);
     } finally {
       setUploading(false);
     }

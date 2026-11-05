@@ -95,10 +95,15 @@ export function refresh() {
   }, 150);
 }
 
+/** Shows an action's error in the app's error toast (page.tsx). */
+export function showError(err: unknown) {
+  useStore.setState({ actionError: err instanceof Error ? err.message : String(err) });
+}
+
 /** Failure path for actions: tell the user, and resync so an optimistic
  * change that never reached the server is rolled back. */
 function fail(err: unknown) {
-  alert(err instanceof Error ? err.message : String(err));
+  showError(err);
   refresh();
 }
 
@@ -166,6 +171,11 @@ type Store = {
   /** Last background-sync failure (backend unreachable), cleared on the next
    * successful sync. Shown as a banner instead of tearing the app down. */
   syncError: string | null;
+  /** Last failed user action's message, shown as a dismissible toast. */
+  actionError: string | null;
+  /** Changes whenever the Anthropic key is set, replaced or removed — lets
+   * ModelInput refetch the model list it determines. "" = not connected. */
+  anthropicKey: string;
   /** Populates currentMemberId from /api/auth/me — called once on boot (see
    * page.tsx's login gate), separately from hydrate() since identity now
    * comes from the authenticated session, not the general state payload. */
@@ -259,6 +269,8 @@ export const useStore = create<Store>((set, get) => ({
   agentDefaults: DEFAULT_AGENT_DEFAULTS,
 
   syncError: null,
+  actionError: null,
+  anthropicKey: "",
   hydrate: async () => {
     const seq = ++hydrateSeq;
     const state = await api.fetchState(syncCursor);
@@ -278,6 +290,7 @@ export const useStore = create<Store>((set, get) => ({
       { messages, directMessages, agents: state.agents }
     );
     hasHydratedOnce = true;
+    const anthropic = state.connections.find((c) => c.key === "anthropic");
     set((s) => ({
       members: keepIfSame(s.members, state.members),
       mcpTools: keepIfSame(s.mcpTools, state.mcpTools),
@@ -293,6 +306,7 @@ export const useStore = create<Store>((set, get) => ({
       workflows: keepIfSame(s.workflows, state.workflows),
       loops: keepIfSame(s.loops, state.loops),
       todos: keepIfSame(s.todos, state.todos),
+      anthropicKey: anthropic?.connected ? `on:${anthropic.hint}` : "",
       selectedRoomId: s.selectedRoomId ?? state.rooms[0]?.id ?? null,
       selectedTaskRoomId:
         s.selectedTaskRoomId ?? state.taskRooms.find((t) => t.roomId === state.rooms[0]?.id)?.id ?? null,
@@ -352,7 +366,7 @@ export const useStore = create<Store>((set, get) => ({
       await api.installMcpTool(toolId);
       await get().hydrate();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      showError(err);
     }
   },
 
@@ -418,7 +432,7 @@ export const useStore = create<Store>((set, get) => ({
         refresh();
       }, (err) => {
         set((s) => ({ messages: s.messages.filter((m) => m.id !== optimistic.id) }));
-        alert(err instanceof Error ? err.message : String(err));
+        showError(err);
       });
   },
 
@@ -440,7 +454,7 @@ export const useStore = create<Store>((set, get) => ({
         refresh();
       }, (err) => {
         set((s) => ({ directMessages: s.directMessages.filter((m) => m.id !== optimistic.id) }));
-        alert(err instanceof Error ? err.message : String(err));
+        showError(err);
       });
   },
 

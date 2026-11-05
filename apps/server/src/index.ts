@@ -1033,8 +1033,10 @@ app.post(
 // --- Claude Code's own auth (separate from Hivemark's stored Anthropic key) ---
 app.get(
   "/api/runtimes/claude-code/status",
-  handle(async (_req, res) => {
-    res.json(await getClaudeCodeAuthStatus());
+  handle(async (req, res) => {
+    const status = await getClaudeCodeAuthStatus();
+    // The signed-in account's email is the owner's; members only see whether it's signed in.
+    res.json(repo.getMemberRole(req.memberId) === "owner" ? status : { ...status, email: undefined });
   })
 );
 app.get(

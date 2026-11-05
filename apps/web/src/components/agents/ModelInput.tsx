@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { fetchModels } from "@/lib/api";
+import { useStore } from "@/lib/store";
 import { AGENT_MODEL_OPTIONS, modelProvider } from "@/lib/agent-constants";
 
 /** Models come from the provider (Anthropic's models API, OpenRouter's
@@ -24,6 +25,8 @@ export function ModelInput({
   // provider's list is still in state, and must not be auto-picked from.
   const [loaded, setLoaded] = useState<{ provider: string; models: string[] }>({ provider, models: [] });
   const models = loaded.provider === provider ? loaded.models : [];
+  // refetch once an Anthropic key is saved (or replaced/removed) while open
+  const anthropicKey = useStore((s) => s.anthropicKey);
 
   useEffect(() => {
     let live = true;
@@ -33,7 +36,7 @@ export function ModelInput({
     return () => {
       live = false;
     };
-  }, [provider]);
+  }, [provider, anthropicKey]);
 
   useEffect(() => {
     const list = loaded.provider === provider ? loaded.models : [];
