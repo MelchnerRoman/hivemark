@@ -5,7 +5,7 @@ import path from "node:path";
 import { repo } from "./db.js";
 import { resolveModelId } from "./modelIds.js";
 import { getAgentWorkspaceDir, getDmWorkspaceDir, getRoomProjectDir, hasBashAccess, TOOL_ACCESS_ENABLED } from "./agentSandbox.js";
-import { firstPartyServer, MCP_TOOL_REGISTRY } from "./mcp/registry.js";
+import { firstPartyServer, resolveMcpTool } from "./mcp/registry.js";
 import type { Agent } from "./types.js";
 import type { HistoryMessage } from "./claudeAgent.js";
 
@@ -38,14 +38,14 @@ function mcpServersFor(agent: Agent, roomId: string | null, turnToken: string | 
     servers.hivemark = { type: "stdio", ...firstPartyServer("workspaceMcpServer", [], { ...baseEnv(), HIVEMARK_TURN_TOKEN: turnToken }) };
   }
   for (const { toolId } of agent.grants) {
-    const config = MCP_TOOL_REGISTRY[toolId];
+    const config = resolveMcpTool(toolId);
     if (!config || toolId === "mcp-filesystem") continue;
     if (toolId === "mcp-preview" && (!TOOL_ACCESS_ENABLED || !roomId)) continue;
     const credential = config.connectionKey ? repo.getConnectionValue(config.connectionKey) : null;
     if (config.connectionKey && !credential) continue;
     servers[toolId] =
       config.kind === "http"
-        ? { type: "http", url: config.url, headers: config.headers(credential!) }
+        ? { type: "http", url: config.url, headers: config.headers(credential) }
         : {
             type: "stdio",
             command: config.command,

@@ -14,6 +14,7 @@ import type {
   AgentTeamMode,
   AppState,
   ChatMessage,
+  CustomMcpPublic,
   ConnectionKey,
   ConnectionStatus,
   DirectMessage,
@@ -251,6 +252,23 @@ db.prepare("UPDATE mcp_tools SET description = ? WHERE id = 'mcp-filesystem'").r
 db.prepare("INSERT OR IGNORE INTO mcp_tools (id, name, description, icon) VALUES ('mcp-preview', 'Preview', ?, 'globe')").run(
   "Start/stop a live preview of the Room's project (npm run dev) so it can be checked in the app"
 );
+
+// Owner-added MCP servers. Each one also has an mcp_tools row (same id,
+// "mcp-custom-<slug>") so grants and the tool list work unchanged. `secrets`
+// is the encrypted JSON of env vars (stdio) / headers (http), like
+// connections.value; `secret_names` is the plaintext list of their names, for
+// display. Never expose `secrets` over the API.
+db.exec(`
+CREATE TABLE IF NOT EXISTS mcp_custom_servers (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  command TEXT,
+  args TEXT NOT NULL DEFAULT '[]',
+  url TEXT,
+  secrets TEXT,
+  secret_names TEXT NOT NULL DEFAULT '[]'
+);
+`);
 
 // Loop run history — added after loops could already exist, so a fresh CREATE
 // TABLE IF NOT EXISTS won't run against an existing DB file. This table itself
@@ -794,8 +812,21 @@ export const repo = {
   getState(): AppState {
     return {
       members: (db.prepare("SELECT * FROM members").all() as any[]).map(rowToMember),
-      mcpTools: (db.prepare("SELECT * FROM mcp_tools").all() as any[]).map(
-        (r): McpTool => ({ id: r.id, name: r.name, description: r.description, icon: r.icon })
+      mcpTools: (
+        db.prepare("SELECT t.*, c.kind, c.command, c.args, c.url, c.secret_names FROM mcp_tools t LEFT JOIN mcp_custom_servers c ON c.id = t.id").all() as any[]
+      ).map(
+        (r): McpTool => ({
+          id: r.id,
+          name: r.name,
+          description: r.description,
+          icon: r.icon,
+          ...(r.kind && {
+            custom:
+              r.kind === "http"
+                ? { kind: "http", url: r.url, secretNames: parseArray(r.secret_names) }
+                : { kind: "stdio", command: r.command, args: parseArray(r.args), secretNames: parseArray(r.secret_names) },
+          }),
+        })
       ),
       rooms: (() => {
         const byRoom = taskRoomIdsByRoom();
@@ -892,6 +923,9 @@ export const repo = {
 
     return {
       ...full,
+      // A custom server's command/args/url can say more than a member needs
+      // (paths, tokens in a URL) — they only learn it's custom.
+      mcpTools: isOwner ? full.mcpTools : full.mcpTools.map((t) => (t.custom ? { ...t, custom: { kind: t.custom.kind } } : t)),
       rooms: full.rooms
         .filter((r) => visibleRoomIds.has(r.id))
         .map((r) => ({ ...r, taskRoomIds: r.taskRoomIds.filter((id) => visibleTaskRoomIds.has(id)) })),
@@ -1366,6 +1400,59 @@ export const repo = {
 
   getConnectionStatuses(): ConnectionStatus[] {
     return (["anthropic", "openrouter", "github", "postgres", "slack", "linear"] as ConnectionKey[]).map(connectionStatus);
+  },
+
+  // --- custom MCP servers (owner-added) ---
+  /** Full config incl. decrypted secrets, for spawning/connecting only. Never send over the API. */
+  getCustomMcpServer(
+    toolId: string
+  ): { kind: "stdio" | "http"; command: string; args: string[]; url: string; secrets: Record<string, string> } | null {
+    const r = db.prepare("SELECT * FROM mcp_custom_servers WHERE id = ?").get(toolId) as any;
+    if (!r) return null;
+    return {
+      kind: r.kind,
+      command: r.command ?? "",
+      args: parseArray(r.args),
+      url: r.url ?? "",
+      secrets: r.secrets ? JSON.parse(decryptSecret(DATA_DIR, r.secrets)) : {},
+    };
+  },
+
+  /** Create or replace. `secrets` undefined = keep the stored ones. */
+  saveCustomMcpServer(
+    toolId: string,
+    p: { name: string; description: string; config: CustomMcpPublic; secrets?: Record<string, string> }
+  ) {
+    db.transaction(() => {
+      db.prepare(
+        "INSERT INTO mcp_tools (id, name, description, icon) VALUES (?,?,?,'plug') ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description"
+      ).run(toolId, p.name, p.description);
+      db.prepare(
+        `INSERT INTO mcp_custom_servers (id, kind, command, args, url) VALUES (?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, command = excluded.command, args = excluded.args, url = excluded.url`
+      ).run(toolId, p.config.kind, p.config.command ?? null, JSON.stringify(p.config.args ?? []), p.config.url ?? null);
+      if (p.secrets) {
+        const names = Object.keys(p.secrets);
+        db.prepare("UPDATE mcp_custom_servers SET secrets = ?, secret_names = ? WHERE id = ?").run(
+          names.length ? encryptSecret(DATA_DIR, JSON.stringify(p.secrets)) : null,
+          JSON.stringify(names),
+          toolId
+        );
+      }
+    })();
+  },
+
+  /** Removes the server, its catalog row, and every agent's grant of it. */
+  removeCustomMcpServer(toolId: string) {
+    db.transaction(() => {
+      db.prepare("DELETE FROM mcp_custom_servers WHERE id = ?").run(toolId);
+      db.prepare("DELETE FROM mcp_tools WHERE id = ?").run(toolId);
+      for (const a of repo.getAllAgents()) {
+        if (a.grants.some((g) => g.toolId === toolId)) {
+          db.prepare("UPDATE agents SET grants = ? WHERE id = ?").run(JSON.stringify(a.grants.filter((g) => g.toolId !== toolId)), a.id);
+        }
+      }
+    })();
   },
 
   // --- auth ---

@@ -11,7 +11,7 @@ import { isCliAvailable } from "./cliCheck.js";
 import { listAnthropicModels, listOpenRouterModels } from "./modelIds.js";
 import { listCodexModels } from "./codexAgent.js";
 import { MCP_TOOL_SETUP } from "./mcp/setup.js";
-import { closeAgentSession, closeAllAgentSessions, startIdleSessionSweep } from "./mcp/manager.js";
+import { closeAgentSession, closeAllAgentSessions, closeSessionsUsingTool, startIdleSessionSweep } from "./mcp/manager.js";
 import {
   getAgentWorkspaceDir,
   getDmWorkspaceDir,
@@ -39,7 +39,7 @@ import {
   allowedReturnTo,
   type ProviderName,
 } from "./auth.js";
-import type { ConnectionKey } from "./types.js";
+import type { ConnectionKey, CustomMcpPublic } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 4001);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -323,6 +323,92 @@ app.post(
     const setup = MCP_TOOL_SETUP[req.params.id];
     if (!setup) return res.status(400).json({ error: "This tool doesn't need installation." });
     await setup.install();
+    bus.emit("sync");
+    res.json({ ok: true });
+  })
+);
+
+// --- custom MCP servers (owner-added; see repo.saveCustomMcpServer) ---
+const CUSTOM_PREFIX = "mcp-custom-";
+const SLUG = /^[a-z0-9][a-z0-9-]{0,23}$/; // short: tool names become "<id>__<tool>", capped at 64 by the API
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const HEADER_NAME = /^[A-Za-z0-9-]{1,64}$/; // RFC 9110 token, minus the rare punctuation
+const isStr = (v: unknown, max: number): v is string => typeof v === "string" && v.length <= max && !v.includes("\0");
+
+/** Validates a create/update body. Returns an error message, or the parsed parts. */
+function parseCustomMcp(body: any, kindWas?: string) {
+  const name = typeof body?.name === "string" ? body.name.trim() : "";
+  if (!name || name.length > 80) return "name: 1-80 characters";
+  const description = body.description ?? "";
+  if (!isStr(description, 500)) return "description: at most 500 characters";
+  let config: CustomMcpPublic;
+  if (body.kind === "stdio") {
+    if (!isStr(body.command, 1024) || !body.command.trim()) return "command: non-empty string";
+    const args = body.args ?? [];
+    if (!Array.isArray(args) || args.length > 64 || !args.every((a) => isStr(a, 4096))) return "args: up to 64 strings";
+    config = { kind: "stdio", command: body.command.trim(), args };
+  } else if (body.kind === "http") {
+    if (!isStr(body.url, 2048) || !URL.canParse(body.url) || !["http:", "https:"].includes(new URL(body.url).protocol)) {
+      return "url: an http(s) URL";
+    }
+    config = { kind: "http", url: body.url };
+  } else return 'kind: "stdio" or "http"';
+  let secrets: Record<string, string> | undefined;
+  if (body.secrets !== undefined) {
+    if (!body.secrets || typeof body.secrets !== "object" || Array.isArray(body.secrets)) return "secrets: object of name -> value";
+    const entries = Object.entries(body.secrets);
+    if (entries.length > 32) return "secrets: at most 32";
+    const nameRe = config.kind === "stdio" ? ENV_NAME : HEADER_NAME;
+    for (const [k, v] of entries) {
+      if (!nameRe.test(k)) return `secrets: invalid ${config.kind === "stdio" ? "env var" : "header"} name "${k}"`;
+      // Header values go on the wire: printable ASCII only (same rule as connections).
+      if (!isStr(v, 4096) || (config.kind === "http" && !/^[\x20-\x7e]*$/.test(v))) return `secrets: invalid value for "${k}"`;
+    }
+    secrets = Object.fromEntries(entries) as Record<string, string>;
+  } else if (kindWas && kindWas !== config.kind) {
+    return "secrets: required when changing kind";
+  }
+  return { name, description, config, secrets };
+}
+
+app.post(
+  "/api/mcp-servers",
+  handle(async (req, res) => {
+    if (!requireOwner(req, res)) return;
+    const slug = req.body?.slug;
+    if (typeof slug !== "string" || !SLUG.test(slug)) return res.status(400).json({ error: "slug: a-z, 0-9, -, up to 24 chars" });
+    const id = CUSTOM_PREFIX + slug;
+    if (repo.getCustomMcpServer(id)) return res.status(409).json({ error: "a custom server with this slug exists" });
+    const parsed = parseCustomMcp(req.body);
+    if (typeof parsed === "string") return res.status(400).json({ error: parsed });
+    repo.saveCustomMcpServer(id, { ...parsed, secrets: parsed.secrets ?? {} });
+    bus.emit("sync");
+    res.json({ id });
+  })
+);
+app.put(
+  "/api/mcp-servers/:id",
+  handle(async (req, res) => {
+    if (!requireOwner(req, res)) return;
+    const existing = req.params.id.startsWith(CUSTOM_PREFIX) ? repo.getCustomMcpServer(req.params.id) : null;
+    if (!existing) return res.status(404).json({ error: "custom server not found" });
+    const parsed = parseCustomMcp(req.body, existing.kind);
+    if (typeof parsed === "string") return res.status(400).json({ error: parsed });
+    repo.saveCustomMcpServer(req.params.id, parsed);
+    await closeSessionsUsingTool(req.params.id);
+    bus.emit("sync");
+    res.json({ id: req.params.id });
+  })
+);
+app.delete(
+  "/api/mcp-servers/:id",
+  handle(async (req, res) => {
+    if (!requireOwner(req, res)) return;
+    if (!req.params.id.startsWith(CUSTOM_PREFIX) || !repo.getCustomMcpServer(req.params.id)) {
+      return res.status(404).json({ error: "custom server not found" });
+    }
+    repo.removeCustomMcpServer(req.params.id);
+    await closeSessionsUsingTool(req.params.id);
     bus.emit("sync");
     res.json({ ok: true });
   })

@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ConnectionKey } from "../types.js";
 import { getAgentWorkspaceDir, getDmWorkspaceDir, getRoomProjectDir } from "../agentSandbox.js";
 import { INTERNAL_TOKEN } from "../internalAuth.js";
+import { repo } from "../db.js";
 
 /**
  * Static config for each entry in our MCP tool catalog. Two shapes:
@@ -20,9 +21,9 @@ export type StdioToolConfig = {
 
 export type HttpToolConfig = {
   kind: "http";
-  connectionKey: ConnectionKey;
+  connectionKey: ConnectionKey | null; // null = custom server, auth (if any) in its own stored headers
   url: string;
-  headers: (credential: string) => Record<string, string>;
+  headers: (credential: string | null) => Record<string, string>;
 };
 
 // Dev runs this file straight from .ts via tsx (see the root "dev" script);
@@ -135,3 +136,17 @@ export const MCP_TOOL_REGISTRY: Record<string, StdioToolConfig | HttpToolConfig>
     headers: (credential) => ({ Authorization: `Bearer ${credential}` }),
   },
 };
+
+/** The one lookup for a granted tool id: a built-in catalog entry, or an
+ * owner-added custom server ("mcp-custom-*", stored in db.ts). Custom stdio
+ * servers get exactly their command/args plus their stored env (merged onto
+ * the callers' minimal env) — no filesystem roots, no internal token. */
+export function resolveMcpTool(toolId: string): StdioToolConfig | HttpToolConfig | undefined {
+  // hasOwn: grants accept any string, and "constructor" etc. live on the prototype.
+  if (Object.hasOwn(MCP_TOOL_REGISTRY, toolId)) return MCP_TOOL_REGISTRY[toolId];
+  const custom = toolId.startsWith("mcp-custom-") ? repo.getCustomMcpServer(toolId) : null;
+  if (!custom) return undefined;
+  return custom.kind === "http"
+    ? { kind: "http", connectionKey: null, url: custom.url, headers: () => custom.secrets }
+    : { kind: "stdio", connectionKey: null, command: custom.command, args: () => custom.args, env: () => custom.secrets };
+}

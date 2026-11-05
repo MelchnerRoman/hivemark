@@ -17,6 +17,19 @@ export type McpTool = {
    * setup step (e.g. downloading a browser binary) before they'll work. Not
    * persisted — computed live by checking the machine's actual state. */
   status?: "ready" | "needs_setup";
+  /** Set for owner-added servers (id "mcp-custom-<slug>"). command/args/url
+   * and secretNames are only sent to the owner; secret values never leave
+   * the server. */
+  custom?: CustomMcpPublic;
+};
+
+export type CustomMcpPublic = {
+  kind: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  /** Names of the stored env vars (stdio) or headers (http) — never values. */
+  secretNames?: string[];
 };
 
 export type AgentGrant = {

@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { repo } from "../db.js";
-import { MCP_TOOL_REGISTRY } from "./registry.js";
+import { resolveMcpTool } from "./registry.js";
 import { TOOL_ACCESS_ENABLED } from "../agentSandbox.js";
 
 export type AnthropicToolDef = {
@@ -34,7 +34,7 @@ export class ToolSession {
   async connect(mcpToolIds: string[], agentId: string, roomId: string | null, dmMemberId: string | null = null): Promise<AnthropicToolDef[]> {
     const defs: AnthropicToolDef[] = [];
     for (const mcpToolId of mcpToolIds) {
-      const config = MCP_TOOL_REGISTRY[mcpToolId];
+      const config = resolveMcpTool(mcpToolId);
       if (!config) continue;
 
       const credential = config.connectionKey ? repo.getConnectionValue(config.connectionKey) : null;
@@ -51,7 +51,7 @@ export class ToolSession {
         const transport =
           config.kind === "http"
             ? new StreamableHTTPClientTransport(new URL(config.url), {
-                requestInit: { headers: config.headers(credential as string) },
+                requestInit: { headers: config.headers(credential) },
               })
             : new StdioClientTransport({
                 command: config.command,
@@ -188,6 +188,16 @@ export async function getSessionForAgent(
 export async function closeAgentSession(agentId: string): Promise<void> {
   const prefix = `${agentId}::`;
   const toClose = [...sessionsByAgent.entries()].filter(([key]) => key.startsWith(prefix));
+  for (const [key, cached] of toClose) {
+    sessionsByAgent.delete(key);
+    await cached.session.close();
+  }
+}
+
+/** Closes every cached session that has this tool connected — a custom
+ * server was edited or deleted, so the next turn reconnects (or drops it). */
+export async function closeSessionsUsingTool(toolId: string): Promise<void> {
+  const toClose = [...sessionsByAgent.entries()].filter(([, cached]) => cached.toolIds.includes(toolId));
   for (const [key, cached] of toClose) {
     sessionsByAgent.delete(key);
     await cached.session.close();
