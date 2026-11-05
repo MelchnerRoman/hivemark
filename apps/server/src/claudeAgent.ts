@@ -132,6 +132,23 @@ function buildHistoryMessages(agent: Agent, turn: Turn): HistoryMessage[] {
   while (keepFrom > 0 && chars + history[keepFrom - 1].content.length <= HISTORY_CHAR_BUDGET) {
     chars += history[--keepFrom].content.length;
   }
+  // Snap the cut forward to the next "checkpoint" — the first message after
+  // every HISTORY_CHAR_BUDGET/2 chars from the conversation's start — so it
+  // moves about once per half-budget of new messages, not every turn, and the
+  // cached prompt prefix survives. Moving it forward only drops more, so the
+  // budget still holds.
+  if (keepFrom > 0 && keepFrom < history.length) {
+    const step = HISTORY_CHAR_BUDGET / 2;
+    let prefix = 0;
+    for (let i = 0; i < history.length - 1; i++) {
+      const next = prefix + history[i].content.length;
+      if (i >= keepFrom - 1 && Math.floor(next / step) > Math.floor(prefix / step)) {
+        keepFrom = i + 1;
+        break;
+      }
+      prefix = next;
+    }
+  }
   // The newest message alone is over budget: keep (the start of) it anyway,
   // or the agent would never see the request it's answering.
   if (keepFrom === history.length && keepFrom > 0) {
@@ -208,12 +225,16 @@ function fileToBlock(dir: string, rel: string, budget: { left: number }): Anthro
 function toAnthropicMessages(history: HistoryMessage[], roomId: string | null): Anthropic.MessageParam[] {
   const dir = roomId ? getRoomProjectDir(roomId) : null;
   const budget = { left: ATTACHMENT_BYTES_BUDGET };
-  // Walked newest-first so the budget goes to what was just shared.
+  // The window starts on a multiple of its size (so it covers the last 10–19
+  // messages) and so moves once per 10 messages — files don't drop out of
+  // the cached prefix one per turn. Walked newest-first so the budget goes to
+  // what was just shared.
+  const windowStart = Math.floor((history.length - ATTACHMENT_CONTENT_WINDOW) / ATTACHMENT_CONTENT_WINDOW) * ATTACHMENT_CONTENT_WINDOW;
   return history
     .map((m, i) => ({ m, i }))
     .reverse()
     .map(({ m, i }): Anthropic.MessageParam => {
-      const recent = i >= history.length - ATTACHMENT_CONTENT_WINDOW;
+      const recent = i >= windowStart;
       if (!dir || !recent || !m.attachments?.length) return { role: m.role, content: m.content };
       const blocks = m.attachments.map((rel) => fileToBlock(dir, rel, budget));
       const skipped = m.attachments.filter((_, j) => blocks[j] === null);

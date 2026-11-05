@@ -121,3 +121,25 @@ test("a single message over the history budget still reaches the agent (cut off)
   assert.match(sent, /HUGE-BRIEF/);
   assert.match(sent, /message cut off here/);
 });
+
+test("an over-budget room keeps the same cut across turns (stable cached prefix)", async () => {
+  // 30 × 20k chars of history, then two turns that each add another 20k.
+  const insert = s.db.prepare(
+    "INSERT INTO messages (id, task_room_id, author_type, author_id, content, created_at) VALUES (?, 'tr-onboarding', 'member', 'x', ?, ?)"
+  );
+  for (let i = 0; i < 30; i++) insert.run(`filler-${i}`, "y".repeat(20_000), new Date(Date.now() + i).toISOString());
+  await new Promise((r) => setTimeout(r, 50));
+  const firsts: unknown[] = [];
+  for (const n of [1, 2]) {
+    const before = mock.requests.length;
+    const replies = agentMessages(agentIds.Designer).length;
+    await s.req("/api/task-rooms/tr-onboarding/messages", {
+      method: "POST",
+      body: JSON.stringify({ content: `@Designer turn ${n} ${"z".repeat(20_000)}` }),
+    });
+    await waitFor(() => mock.requests.length > before && agentMessages(agentIds.Designer).length > replies);
+    firsts.push(mock.requests.at(-1).messages[0]);
+  }
+  assert.match(JSON.stringify(firsts[0]), /older message\(s\)/);
+  assert.deepEqual(firsts[1], firsts[0]);
+});
