@@ -21,7 +21,7 @@ const WEB_TOOLS = ["WebSearch", "WebFetch"];
 
 // What a stdio MCP server needs to start (npx needs PATH) — not relying on
 // the CLI to merge its own environment in.
-function baseEnv(): Record<string, string> {
+export function baseEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const k of ["PATH", "HOME", "USER", "LANG", "TMPDIR"]) if (process.env[k]) env[k] = process.env[k]!;
   return env;
@@ -32,8 +32,11 @@ function baseEnv(): Record<string, string> {
  * agent's granted catalog tools, under the same credential / opt-in rules
  * the API runtimes apply (mcp/manager.ts). "Files" is skipped — on this
  * runtime it's Claude Code's own Read/Write (above). */
-function mcpServersFor(agent: Agent, roomId: string | null, turnToken: string | null): Record<string, object> {
-  const servers: Record<string, object> = {};
+export type McpServer =
+  | { type: "stdio"; command: string; args: string[]; env: Record<string, string> }
+  | { type: "http"; url: string; headers: Record<string, string> };
+export function mcpServersFor(agent: Agent, roomId: string | null, turnToken: string | null): Record<string, McpServer> {
+  const servers: Record<string, McpServer> = {};
   if (turnToken) {
     servers.hivemark = { type: "stdio", ...firstPartyServer("workspaceMcpServer", [], { ...baseEnv(), HIVEMARK_TURN_TOKEN: turnToken }) };
   }

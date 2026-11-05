@@ -34,9 +34,16 @@ fake(
     { type: "result", subtype: "success", is_error: false, result: "Claude Code done." },
   ])
 );
-// goose run --output-format stream-json, as goose 1.57 printed it.
+// goose run --output-format stream-json, as goose 1.57 printed it. Also
+// records how it was started (argv, env key names, cwd, launcher-script modes).
+const gooseCalls = path.join(bin, "goose-calls.jsonl");
 fake(
   "goose",
+  `const fs = require("node:fs");
+const scripts = {};
+for (const a of process.argv) { const m = /'([^']+\\.sh)'$/.exec(a); if (m) scripts[m[1]] = { mode: fs.statSync(m[1]).mode & 0o777, body: fs.readFileSync(m[1], "utf8") }; }
+fs.appendFileSync(${JSON.stringify(gooseCalls)}, JSON.stringify({ argv: process.argv.slice(2), env: Object.keys(process.env), home: process.env.HOME, cwd: process.cwd(), scripts }) + "\\n");
+` +
   lines([
     { type: "message", message: { id: "m1", role: "assistant", content: [{ type: "text", text: "Looking." }] } },
     {
@@ -74,16 +81,17 @@ process.stdin.on("data", (c) => {
 let s: TestServer;
 const ids: Record<string, string> = {};
 before(async () => {
-  s = await startServer({ PATH: `${bin}${path.delimiter}${process.env.PATH}` });
+  s = await startServer({ PATH: `${bin}${path.delimiter}${process.env.PATH}`, ENABLE_AGENT_TOOL_ACCESS: "1", SERVER_ONLY_SECRET: "x" });
   await s.req("/api/connections/anthropic", { method: "PUT", body: JSON.stringify({ value: "sk-ant-test" }) }); // goose needs one
-  for (const [name, runtimeId] of [
-    ["CC", "runtime-claude-code"],
-    ["Cx", "runtime-codex"],
-    ["Gs", "runtime-goose"],
-  ]) {
+  for (const [name, runtimeId, toolIds] of [
+    ["CC", "runtime-claude-code", []],
+    ["Cx", "runtime-codex", []],
+    ["Gs", "runtime-goose", []],
+    ["Gb", "runtime-goose", ["bash-access"]],
+  ] as const) {
     const res = await s.req("/api/agents", {
       method: "POST",
-      body: JSON.stringify({ taskRoomId: "tr-onboarding", name, instructions: "", color: "#000", avatarEmoji: "x", model: "", runtimeId, toolIds: [] }),
+      body: JSON.stringify({ taskRoomId: "tr-onboarding", name, instructions: "", color: "#000", avatarEmoji: "x", model: "", runtimeId, toolIds }),
     });
     ids[name] = (await res.json()).id;
   }
@@ -112,4 +120,35 @@ test("Codex: ACP tool_call updates become the reply's tool trace", async () => {
 
 test("Goose: stream-json toolRequest blocks become the reply's tool trace", async () => {
   assert.deepEqual(await reply("Gs"), { content: "Looking.\n\nGoose done.", meta: { tools: [{ name: "shell", input: '{"command":"ls"}' }] } });
+});
+
+const lastGooseCall = () => JSON.parse(fs.readFileSync(gooseCalls, "utf8").trim().split("\n").at(-1)!);
+
+test("Goose without grants: no builtins, no user profile, minimal env, cwd outside any workspace", () => {
+  const call = lastGooseCall(); // from Gs's turn above
+  assert.ok(call.argv.includes("--no-profile"));
+  assert.ok(!call.argv.includes("--with-builtin"));
+  assert.deepEqual(
+    call.env.filter((k: string) => !["__CF_USER_TEXT_ENCODING", "LANG", "USER", "TMPDIR"].includes(k)).sort(),
+    ["ANTHROPIC_API_KEY", "GOOSE_DISABLE_KEYRING", "GOOSE_DISABLE_SESSION_NAMING", "HOME", "PATH"]
+  );
+  assert.notEqual(call.home, os.homedir());
+  assert.equal(path.basename(call.cwd), path.basename(call.home)); // the empty per-turn HOME, not a project dir
+  assert.ok(!fs.existsSync(call.home), "per-turn HOME removed after the turn");
+  // Task-room turn: our workspace tools as an MCP extension, via an env -i
+  // launcher script that only the server user can read (token not in argv).
+  const ext = call.argv[call.argv.indexOf("--with-extension") + 1];
+  assert.match(ext, /^hivemark:\/usr\/bin\/env -i \/bin\/sh '.+\.sh'$/);
+  const [script] = Object.values(call.scripts) as { mode: number; body: string }[];
+  assert.equal(script.mode, 0o600);
+  assert.match(script.body, /^export 'HIVEMARK_TURN_TOKEN'='[0-9a-f]{48}'$/m);
+  assert.ok(!call.argv.join(" ").includes("HIVEMARK_TURN_TOKEN"));
+});
+
+test("Goose with the bash grant: developer builtin, cwd = the Room's project folder", async () => {
+  await reply("Gb");
+  const call = lastGooseCall();
+  assert.equal(call.argv[call.argv.indexOf("--with-builtin") + 1], "developer");
+  const { room_id } = s.db.prepare("SELECT room_id FROM task_rooms WHERE id = 'tr-onboarding'").get() as { room_id: string };
+  assert.equal(call.cwd, fs.realpathSync(path.join(s.dataDir, "room-projects", room_id)));
 });

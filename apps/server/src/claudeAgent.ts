@@ -458,7 +458,7 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
   // attachments that never happen.
   const runsOurTools = runtime === "runtime-hivemark" || runtime === "runtime-openrouter";
   const { session, tools: mcpTools } = await getSessionForAgent(agentId, runsOurTools ? grantedToolIds : [], roomId, dmMemberId);
-  const bridged = runtime === "runtime-claude-code";
+  const bridged = runtime === "runtime-claude-code" || runtime === "runtime-goose";
   const workspace =
     (runsOurTools || bridged) && turn.kind === "task_room" && roomId
       ? createWorkspaceTools(turn.taskRoomId, roomId)
@@ -531,7 +531,7 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
         finalText = await runCodexTurn(agent, system, history, roomId, signal, dmMemberId, traceTool);
         break;
       case "runtime-goose":
-        finalText = await runGooseTurn(agent, system, history, signal, traceTool);
+        finalText = await runGooseTurn(agent, system, history, roomId, signal, turnToken, dmMemberId, traceTool);
         break;
       default: {
         const modelId = resolveModelId(agent.model);
