@@ -90,9 +90,14 @@ describe("auth disabled (local mode)", () => {
 describe("auth enabled (multi-user)", () => {
   let s: TestServer;
   let mock: MockAnthropic;
+  let held: Promise<void> = Promise.resolve();
   let agentId: string;
   before(async () => {
-    mock = await startMockAnthropic(() => ({ blocks: [{ text: "ok" }], stop: "end_turn" }));
+    // A request whose conversation says HOLD stays in flight until release().
+    mock = await startMockAnthropic(async (body) => {
+      if (JSON.stringify(body.messages).includes("HOLD")) await held;
+      return { blocks: [{ text: "ok" }], stop: "end_turn" };
+    });
     s = await startServer({
       ANTHROPIC_BASE_URL: mock.url,
       GOOGLE_CLIENT_ID: "cid",
@@ -190,6 +195,34 @@ describe("auth enabled (multi-user)", () => {
 
     assert.equal((await s.req(`/api/direct-messages/${mine.id}`, { method: "DELETE", as: "own" })).status, 404);
     assert.equal((await s.req(`/api/direct-messages/${mine.id}`, { method: "PATCH", as: "own", body: JSON.stringify({ content: "x" }) })).status, 404);
+  });
+
+  test("Stop only cancels the caller's own DM turns, not other members' (queued or running)", async () => {
+    const dm = (as: string, content: string) =>
+      s.req(`/api/agents/${agentId}/dm`, { method: "POST", as, body: JSON.stringify({ content }) });
+    const stop = (as: string) => s.req(`/api/agents/${agentId}/stop`, { method: "POST", as });
+    const sent = (text: string) => mock.requests.some((r) => JSON.stringify(r.messages).includes(text));
+    const agentReplies = (memberId: string) =>
+      (s.db.prepare("SELECT COUNT(*) n FROM direct_messages WHERE agent_id = ? AND member_id = ? AND author_type = 'agent'").get(agentId, memberId) as { n: number }).n;
+
+    // m-in's DM runs; the owner's queues behind it. m-in stops: theirs aborts, the owner's still runs.
+    let release!: () => void;
+    held = new Promise((r) => (release = r));
+    await dm("in", "HOLD running from m-in");
+    await waitFor(() => sent("HOLD running from m-in"));
+    await dm("own", "queued from owner");
+    assert.equal((await stop("in")).status, 200);
+    await waitFor(() => sent("queued from owner"));
+    release();
+
+    // the owner's DM runs; m-in stops: it keeps running and gets its reply.
+    const before = agentReplies("m-owner");
+    held = new Promise((r) => (release = r));
+    await dm("own", "HOLD running from owner");
+    await waitFor(() => sent("HOLD running from owner"));
+    assert.equal((await stop("in")).status, 200);
+    release();
+    await waitFor(() => agentReplies("m-owner") > before);
   });
 
   test("incremental /api/state: only changes, only visible rooms, full again when access changes", async () => {

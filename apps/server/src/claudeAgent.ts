@@ -299,7 +299,7 @@ function webResearchTools(modelId: string): Anthropic.ToolUnion[] {
 // other's "running" status. The controller is what the Stop button aborts
 // (see stopAgentTurn). Triggers that arrive mid-turn are queued (one per
 // conversation) and run afterwards, instead of being dropped.
-const agentsInFlight = new Map<string, AbortController>();
+const agentsInFlight = new Map<string, { controller: AbortController; turn: Turn }>();
 
 // Workspace tools of in-flight Claude Code turns, by a per-turn token: the
 // CLI reaches them through our own MCP server (mcp/workspaceMcpServer.ts),
@@ -317,10 +317,18 @@ function conversationKey(turn: Turn) {
 
 /** Aborts the agent's in-flight turn, if any (cancels the API request / kills
  * the spawned CLI; the turn ends without posting a reply), and drops any
- * turns queued behind it. */
-export function stopAgentTurn(agentId: string) {
-  queuedTurns.delete(agentId);
-  agentsInFlight.get(agentId)?.abort();
+ * turns queued behind it. With `memberId`, only what that member may stop:
+ * Room turns (shared work) and their own DMs — other members' DM turns run
+ * on. Returns true if a turn it wasn't allowed to stop is still running. */
+export function stopAgentTurn(agentId: string, memberId?: string): boolean {
+  const stoppable = (t: Turn) => !memberId || t.kind !== "dm" || t.memberId === memberId;
+  const kept = (queuedTurns.get(agentId) ?? []).filter((t) => !stoppable(t));
+  if (kept.length) queuedTurns.set(agentId, kept);
+  else queuedTurns.delete(agentId);
+  const running = agentsInFlight.get(agentId);
+  if (running && !stoppable(running.turn)) return true;
+  running?.controller.abort();
+  return false;
 }
 
 /**
@@ -353,7 +361,7 @@ export async function runAgentTurn(agentId: string, turn: Turn): Promise<void> {
     return;
   }
   const controller = new AbortController();
-  agentsInFlight.set(agentId, controller);
+  agentsInFlight.set(agentId, { controller, turn });
   try {
     await runAgentTurnLocked(agentId, turn, controller.signal);
   } finally {

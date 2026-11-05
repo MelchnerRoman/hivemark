@@ -90,14 +90,14 @@ export type MockAnthropic = {
 /** A local stand-in for the Anthropic Messages API (streaming SSE). `script`
  * picks the reply per request; every request body is recorded. */
 export async function startMockAnthropic(
-  script: (body: any) => { blocks: MockBlock[]; stop: string }
+  script: (body: any) => { blocks: MockBlock[]; stop: string } | Promise<{ blocks: MockBlock[]; stop: string }>
 ): Promise<MockAnthropic> {
   const requests: any[] = [];
   let n = 0;
   const server = http.createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => (raw += c));
-    req.on("end", () => {
+    req.on("end", async () => {
       if (req.method === "GET" && req.url?.startsWith("/v1/models")) {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ data: MOCK_MODELS, has_more: false, first_id: null, last_id: null }));
@@ -105,7 +105,7 @@ export async function startMockAnthropic(
       }
       const body = JSON.parse(raw);
       requests.push(body);
-      const { blocks, stop } = script(body);
+      const { blocks, stop } = await script(body);
       res.writeHead(200, { "content-type": "text/event-stream" });
       const ev = (type: string, d: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...d })}\n\n`);
       ev("message_start", {

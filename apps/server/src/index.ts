@@ -744,8 +744,7 @@ app.post(
   handle((req, res) => {
     const agent = requireAgentAccess(req, res);
     if (!agent) return;
-    stopAgentTurn(agent.id);
-    repo.setAgentStatus(agent.id, "idle");
+    if (!stopAgentTurn(agent.id, req.memberId)) repo.setAgentStatus(agent.id, "idle");
     bus.emit("sync");
     res.json({ ok: true });
   })
@@ -755,8 +754,7 @@ app.post(
   handle((req, res) => {
     // Same scope as the single-agent stop route above.
     for (const agent of repo.getAllAgents().filter((a) => repo.isTaskRoomMember(a.taskRoomId, req.memberId))) {
-      stopAgentTurn(agent.id);
-      if (agent.status === "running") repo.setAgentStatus(agent.id, "idle");
+      if (!stopAgentTurn(agent.id, req.memberId) && agent.status === "running") repo.setAgentStatus(agent.id, "idle");
     }
     bus.emit("sync");
     res.json({ ok: true });
