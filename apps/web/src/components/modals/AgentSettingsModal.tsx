@@ -6,7 +6,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Switch } from "@/components/ui/Switch";
-import { useStore } from "@/lib/store";
+import { showError, useStore } from "@/lib/store";
 import { RuntimeSelect } from "@/components/agents/RuntimeSelect";
 import { ModelInput } from "@/components/agents/ModelInput";
 import { CustomMcpModal } from "@/components/modals/CustomMcpModal";
@@ -17,6 +17,7 @@ import {
   removeConnection,
   setConnection,
   triggerClaudeCodeLogin,
+  claudeCodeLogout,
 } from "@/lib/api";
 import type { ClaudeCodeAuthStatus } from "@/lib/api";
 import type { AgentDefaults, ConnectionStatus, McpTool } from "@/lib/types";
@@ -314,6 +315,7 @@ const CONNECTION_HELP: Record<string, string> = {
 function ClaudeCodeSignIn({ isOwner }: { isOwner: boolean }) {
   const [status, setStatus] = useState<ClaudeCodeAuthStatus | null>(null);
   const [waiting, setWaiting] = useState(false);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
 
   useEffect(() => {
     getClaudeCodeAuthStatus()
@@ -343,10 +345,47 @@ function ClaudeCodeSignIn({ isOwner }: { isOwner: boolean }) {
     await triggerClaudeCodeLogin();
   }
 
+  async function handleSignOut() {
+    setConfirmSignOut(false);
+    try {
+      await claudeCodeLogout();
+      setStatus(await getClaudeCodeAuthStatus());
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  if (confirmSignOut) {
+    return (
+      <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-danger/40 bg-danger-soft px-3 py-2 text-xs">
+        <span className="flex-1">
+          Sign out of Claude Code? This also signs out the Claude Code CLI in your terminal, and Claude Code agents stop
+          working until you sign in again.
+        </span>
+        <Button variant="secondary" onClick={() => setConfirmSignOut(false)}>
+          Cancel
+        </Button>
+        <Button variant="danger" onClick={handleSignOut}>
+          Sign out
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="mt-1.5 flex items-center gap-2">
       {status.loggedIn ? (
-        <Badge tone="accent">{status.email ? `Signed in as ${status.email}` : "Signed in"}</Badge>
+        <>
+          <Badge tone="accent">{status.email ? `Signed in as ${status.email}` : "Signed in"}</Badge>
+          {isOwner && (
+            <button
+              onClick={() => setConfirmSignOut(true)}
+              className="text-xs text-foreground-muted hover:text-danger hover:underline"
+            >
+              Sign out
+            </button>
+          )}
+        </>
       ) : !isOwner ? (
         <Badge tone="neutral">Not signed in</Badge>
       ) : (

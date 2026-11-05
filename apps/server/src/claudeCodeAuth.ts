@@ -47,3 +47,9 @@ export function triggerClaudeCodeLogin(): void {
   const child = spawn("claude", ["auth", "login"], { stdio: "ignore", detached: true });
   child.unref();
 }
+
+/** Real `claude auth logout`: removes the CLI's stored credentials on this
+ * machine, so Claude Code agents stop working until someone signs in again. */
+export async function claudeCodeLogout(): Promise<void> {
+  await execFileAsync("claude", ["auth", "logout"], { timeout: 15_000 });
+}

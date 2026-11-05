@@ -6,7 +6,7 @@ import { repo } from "./db.js";
 import { bus } from "./events.js";
 import { findMentionedAgents, getActiveTurn, getTurnBridge, runAgentTurn, stopAgentTurn } from "./claudeAgent.js";
 import { startScheduler } from "./scheduler.js";
-import { getClaudeCodeAuthStatus, triggerClaudeCodeLogin } from "./claudeCodeAuth.js";
+import { getClaudeCodeAuthStatus, triggerClaudeCodeLogin, claudeCodeLogout } from "./claudeCodeAuth.js";
 import { isCliAvailable } from "./cliCheck.js";
 import { listAnthropicModels, listOpenRouterModels } from "./modelIds.js";
 import { listCodexModels } from "./codexAgent.js";
@@ -1070,6 +1070,14 @@ app.post(
   handle((req, res) => {
     if (!requireOwner(req, res)) return;
     triggerClaudeCodeLogin();
+    res.json({ ok: true });
+  })
+);
+app.post(
+  "/api/runtimes/claude-code/logout",
+  handle(async (req, res) => {
+    if (!requireOwner(req, res)) return;
+    await claudeCodeLogout();
     res.json({ ok: true });
   })
 );

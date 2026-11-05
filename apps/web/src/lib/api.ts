@@ -470,3 +470,7 @@ export function getClaudeCodeAuthStatus(): Promise<ClaudeCodeAuthStatus> {
 export function triggerClaudeCodeLogin(): Promise<void> {
   return request("/api/runtimes/claude-code/login", { method: "POST" });
 }
+
+export function claudeCodeLogout(): Promise<void> {
+  return request("/api/runtimes/claude-code/logout", { method: "POST" });
+}
