@@ -263,6 +263,22 @@ function toolResultContent(result: ToolResult): Anthropic.ToolResultBlockParam["
   ];
 }
 
+// Prompt caching: breakpoints on tools, system and the last message, so the
+// next request (next tool round or next turn) re-reads that prefix at ~0.1x.
+// The installed SDK (0.71) predates top-level auto-caching.
+const EPHEMERAL: Anthropic.CacheControlEphemeral = { type: "ephemeral" };
+
+/** A copy of messages whose last block carries the cache breakpoint — a copy,
+ * so the breakpoint moves with each tool round instead of piling up past the
+ * API's limit of 4. */
+function withCacheBreakpoint(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  const last = messages.at(-1)!;
+  const blocks: Anthropic.ContentBlockParam[] =
+    typeof last.content === "string" ? [{ type: "text", text: last.content }] : last.content;
+  const marked = { ...blocks.at(-1)!, cache_control: EPHEMERAL } as Anthropic.ContentBlockParam;
+  return [...messages.slice(0, -1), { ...last, content: [...blocks.slice(0, -1), marked] }];
+}
+
 /** Anthropic's server-side web search/fetch (they run on Anthropic's side —
  * results come back in the same response, no tool loop on ours). The current
  * `_20260209` variants need Sonnet 4.6+/Opus 4.6+; Haiku gets basic search.
@@ -468,6 +484,7 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
           ...tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema as any })),
           ...(grantedToolIds.includes("web-research") ? webResearchTools(modelId) : []),
         ];
+        if (anthropicTools.length) anthropicTools.push({ ...anthropicTools.pop()!, cache_control: EPHEMERAL } as Anthropic.ToolUnion);
 
         finalText = "";
         for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
@@ -478,8 +495,8 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
               {
                 model: modelId,
                 max_tokens: MAX_OUTPUT_TOKENS,
-                system,
-                messages,
+                system: [{ type: "text", text: system, cache_control: EPHEMERAL }],
+                messages: withCacheBreakpoint(messages),
                 ...(anthropicTools.length ? { tools: anthropicTools } : {}),
               },
               { signal }

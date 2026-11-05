@@ -14,7 +14,7 @@ before(async () => {
   mock = await startMockAnthropic((body) => {
     const last = body.messages.at(-1);
     const afterTool = Array.isArray(last.content) && last.content.some((b: { type: string }) => b.type === "tool_result");
-    if (body.system.includes("You are PM,") && !afterTool && JSON.stringify(last).includes("kick off")) {
+    if (body.system[0].text.includes("You are PM,") && !afterTool && JSON.stringify(last).includes("kick off")) {
       return {
         blocks: [
           { tool: "add_todo", input: { text: "Design hero", assignee: "Designer" } },
@@ -23,7 +23,7 @@ before(async () => {
         stop: "tool_use",
       };
     }
-    if (body.system.includes("You are PM,") && afterTool) {
+    if (body.system[0].text.includes("You are PM,") && afterTool) {
       return { blocks: [{ text: "Plan ready. @Designer please design the hero." }], stop: "end_turn" };
     }
     return { blocks: [{ text: "On it." }], stop: "end_turn" };
@@ -72,7 +72,7 @@ test("brief with an image -> PM plans, attaches, hands off to Designer", async (
   await waitFor(() => agentMessages(agentIds.Designer).length > 0);
 
   const first = mock.requests[0];
-  assert.match(first.system, /@Designer/, "teammates listed in the system prompt");
+  assert.match(first.system[0].text, /@Designer/, "teammates listed in the system prompt");
   assert.equal(first.max_tokens, 32000);
   assert.ok(first.tools.some((t: { type?: string }) => t.type?.startsWith("web_search")), "web research granted");
   const lastBlocks = first.messages.at(-1).content;
@@ -82,6 +82,18 @@ test("brief with an image -> PM plans, attaches, hands off to Designer", async (
   assert.deepEqual(JSON.parse(pmReply.attachments), ["uploads/brief.png"]);
   const todo = s.db.prepare("SELECT assignee_id FROM todos WHERE text = 'Design hero'").get() as { assignee_id: string };
   assert.equal(todo.assignee_id, agentIds.Designer);
+});
+
+test("prompt caching: breakpoints on tools, system and the last message (moving with each tool round)", () => {
+  const [first, second] = mock.requests.filter((r) => r.system[0].text.includes("You are PM,"));
+  const marked = (r: any) =>
+    r.messages.flatMap((m: any) => (Array.isArray(m.content) ? m.content : [])).filter((b: any) => b.cache_control).length;
+  for (const r of [first, second]) {
+    assert.deepEqual(r.system[0].cache_control, { type: "ephemeral" });
+    assert.deepEqual(r.tools.at(-1).cache_control, { type: "ephemeral" });
+    assert.deepEqual(r.messages.at(-1).content.at(-1).cache_control, { type: "ephemeral" });
+    assert.equal(marked(r), 1, "one message breakpoint, never piling up");
+  }
 });
 
 test("Run when the agent's own reply is the latest message doesn't send an assistant-last conversation", async () => {
