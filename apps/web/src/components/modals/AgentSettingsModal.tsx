@@ -9,7 +9,9 @@ import { Switch } from "@/components/ui/Switch";
 import { useStore } from "@/lib/store";
 import { RuntimeSelect } from "@/components/agents/RuntimeSelect";
 import { ModelInput } from "@/components/agents/ModelInput";
+import { CustomMcpModal } from "@/components/modals/CustomMcpModal";
 import {
+  deleteMcpServer,
   fetchConnections,
   getClaudeCodeAuthStatus,
   removeConnection,
@@ -17,7 +19,7 @@ import {
   triggerClaudeCodeLogin,
 } from "@/lib/api";
 import type { ClaudeCodeAuthStatus } from "@/lib/api";
-import type { AgentDefaults, ConnectionStatus } from "@/lib/types";
+import type { AgentDefaults, ConnectionStatus, McpTool } from "@/lib/types";
 
 export function AgentSettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
@@ -39,6 +41,22 @@ function AgentSettingsBody() {
   const agentDefaults = useStore((s) => s.agentDefaults);
   const setAgentDefaults = useStore((s) => s.setAgentDefaults);
   const [installingToolId, setInstallingToolId] = useState<string | null>(null);
+  const isOwner = useStore((s) => s.members.find((m) => m.id === s.currentMemberId)?.role === "owner");
+  // undefined = closed, null = adding, a tool = editing it
+  const [mcpEditing, setMcpEditing] = useState<McpTool | null | undefined>(undefined);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [mcpError, setMcpError] = useState<string | null>(null);
+
+  async function handleDeleteMcp(toolId: string) {
+    setMcpError(null);
+    try {
+      await deleteMcpServer(toolId);
+      setConfirmDeleteId(null);
+      await useStore.getState().hydrate();
+    } catch (err) {
+      setMcpError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   async function handleInstallTool(toolId: string) {
     setInstallingToolId(toolId);
@@ -165,7 +183,27 @@ function AgentSettingsBody() {
                   <span className="text-sm font-medium">{tool.name}</span>
                   {tool.status === "needs_setup" && <Badge tone="warning">Setup needed</Badge>}
                   {tool.status === "ready" && <Badge tone="accent">Ready</Badge>}
+                  {tool.custom && (
+                    <Badge tone="neutral">{tool.custom.kind === "stdio" ? "Custom · local" : "Custom · remote"}</Badge>
+                  )}
                 </div>
+                {tool.custom && isOwner && confirmDeleteId !== tool.id && (
+                  <div className="flex gap-2">
+                    <Button variant="secondary" onClick={() => setMcpEditing(tool)} aria-label={`Edit ${tool.name}`}>
+                      Edit
+                    </Button>
+                    <Button
+                      variant="danger"
+                      onClick={() => {
+                        setMcpError(null);
+                        setConfirmDeleteId(tool.id);
+                      }}
+                      aria-label={`Delete ${tool.name}`}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                )}
                 {tool.status === "needs_setup" && (
                   <Button
                     variant="secondary"
@@ -177,9 +215,42 @@ function AgentSettingsBody() {
                 )}
               </div>
               <p className="mt-1.5 text-xs text-foreground-muted">{tool.description}</p>
+              {tool.custom && isOwner && (
+                <p className="mt-1 truncate font-mono text-xs text-foreground-muted">
+                  {tool.custom.kind === "stdio"
+                    ? [tool.custom.command, ...(tool.custom.args ?? [])].join(" ")
+                    : tool.custom.url}
+                </p>
+              )}
+              {confirmDeleteId === tool.id && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger">
+                  <span className="mr-auto">Delete {tool.name}? Agents lose access to it immediately.</span>
+                  <Button variant="ghost" onClick={() => setConfirmDeleteId(null)}>
+                    Cancel
+                  </Button>
+                  <Button variant="danger" onClick={() => handleDeleteMcp(tool.id)}>
+                    Delete server
+                  </Button>
+                </div>
+              )}
+              {confirmDeleteId === tool.id && mcpError && (
+                <p role="alert" className="mt-1.5 text-xs text-danger">
+                  {mcpError}
+                </p>
+              )}
             </div>
           ))}
         </div>
+        {isOwner && (
+          <button
+            type="button"
+            onClick={() => setMcpEditing(null)}
+            className="mt-3 flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-foreground-muted hover:bg-surface-raised hover:text-foreground"
+          >
+            <span>+</span> Add MCP server
+          </button>
+        )}
+        <CustomMcpModal open={mcpEditing !== undefined} tool={mcpEditing ?? null} onClose={() => setMcpEditing(undefined)} />
       </section>
 
       <section>

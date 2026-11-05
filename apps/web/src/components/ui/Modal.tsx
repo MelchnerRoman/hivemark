@@ -42,7 +42,8 @@ export function Modal({
       ref={ref}
       aria-label={title}
       // Fires for Escape and for our own close(); only report the former.
-      onClose={() => open && onClose()}
+      // React bubbles a nested modal's close up the component tree: ignore it.
+      onClose={(e) => e.target === e.currentTarget && open && onClose()}
       className={`m-auto max-h-[85vh] w-[calc(100%-2rem)] flex-col rounded-xl border border-border bg-surface p-5 text-foreground shadow-xl backdrop:bg-black/40 backdrop:backdrop-blur-sm open:flex ${SIZE_CLASSES[size]}`}
     >
       {open && (

@@ -12,6 +12,14 @@ export type McpTool = {
   description: string;
   icon: string;
   status: "ready" | "needs_setup";
+  /** Owner-added server (id "mcp-custom-<slug>"). Only the owner gets command/args/url/secretNames. */
+  custom?: {
+    kind: "stdio" | "http";
+    command?: string;
+    args?: string[];
+    url?: string;
+    secretNames?: string[];
+  };
 };
 
 export type AgentGrant = {

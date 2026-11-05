@@ -328,6 +328,23 @@ export function installMcpTool(toolId: string): Promise<void> {
   return request(`/api/mcp-tools/${toolId}/install`, { method: "POST" });
 }
 
+// --- custom MCP servers (owner only) ---
+export type CustomMcpInput = {
+  name: string;
+  description: string;
+  secrets?: Record<string, string>;
+} & ({ kind: "stdio"; command: string; args: string[] } | { kind: "http"; url: string });
+export function createMcpServer(input: CustomMcpInput & { slug: string }): Promise<{ id: string }> {
+  return request("/api/mcp-servers", { method: "POST", body: JSON.stringify(input) });
+}
+/** Omit `secrets` to keep the stored ones. */
+export function updateMcpServer(id: string, input: CustomMcpInput): Promise<{ id: string }> {
+  return request(`/api/mcp-servers/${id}`, { method: "PUT", body: JSON.stringify(input) });
+}
+export function deleteMcpServer(id: string): Promise<void> {
+  return request(`/api/mcp-servers/${id}`, { method: "DELETE" });
+}
+
 // --- files ---
 /** dm: your own private DM folder with the agent instead of its room scratch folder. */
 export function listAgentFiles(agentId: string, dm = false): Promise<FileListing> {
