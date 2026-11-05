@@ -467,8 +467,7 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
   if (turnToken) turnBridges.set(turnToken, { workspace: workspace!, signal });
   const tools = [...mcpTools, ...(workspace?.defs ?? [])];
   // What the agent called this turn, shown under its reply (MessageMeta.tools).
-  // Covers the runtimes whose tool loop runs here; the CLI runtimes only
-  // report their final text.
+  // The CLI runtimes report theirs through the same recorder (`traceTool`).
   const toolTrace: NonNullable<MessageMeta["tools"]> = [];
   const traceTool = (name: string, input: unknown) => {
     if (toolTrace.length >= MAX_TOOL_TRACE) return; // ponytail: later calls dropped, count shows the cap
@@ -526,13 +525,13 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
         finalText = await runOpenRouterTurn(agent, system, history, callTool, tools, signal);
         break;
       case "runtime-claude-code":
-        finalText = await runClaudeCodeTurn(agent, system, history, roomId, signal, turnToken, dmMemberId);
+        finalText = await runClaudeCodeTurn(agent, system, history, roomId, signal, turnToken, dmMemberId, traceTool);
         break;
       case "runtime-codex":
-        finalText = await runCodexTurn(agent, system, history, roomId, signal, dmMemberId);
+        finalText = await runCodexTurn(agent, system, history, roomId, signal, dmMemberId, traceTool);
         break;
       case "runtime-goose":
-        finalText = await runGooseTurn(agent, system, history, signal);
+        finalText = await runGooseTurn(agent, system, history, signal, traceTool);
         break;
       default: {
         const modelId = resolveModelId(agent.model);
