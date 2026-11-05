@@ -27,6 +27,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [confirmGrant, setConfirmGrant] = useState<{ agentId: string; toolId: string } | null>(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   function toggleTool(agent: Agent, toolId: string, granted: boolean) {
     if (granted || !GRANT_WARNINGS[toolId]) toggleAgentTool(agent.id, toolId);
@@ -49,6 +50,9 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
           const creator = members.find((m) => m.id === agent.createdById);
           const isHome = agent.taskRoomId === taskRoomId;
           const homeTaskRoom = taskRooms.find((t) => t.id === agent.taskRoomId);
+          // Editing/running/granting is for members of its home task room
+          // (the server 403s anyone else) — you only get it in state if you are.
+          const canManage = !!homeTaskRoom;
           return (
             <div key={agent.id} className="rounded-xl border border-border bg-surface p-4">
               <div className="flex items-start justify-between">
@@ -62,28 +66,34 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                     <p className="text-xs text-foreground-muted">
                       {agent.model} · Created by {creator?.name ?? "someone"}
                       {!isHome && homeTaskRoom && ` · Home: ${homeTaskRoom.emoji} ${homeTaskRoom.name}`}
-                      {" · "}
-                      <button
-                        onClick={() => setEditingAgentId(editingAgentId === agent.id ? null : agent.id)}
-                        className="text-brand hover:underline"
-                      >
-                        {editingAgentId === agent.id ? "Cancel" : "Edit agent"}
-                      </button>
+                      {canManage && (
+                        <>
+                          {" · "}
+                          <button
+                            onClick={() => setEditingAgentId(editingAgentId === agent.id ? null : agent.id)}
+                            className="text-brand hover:underline"
+                          >
+                            {editingAgentId === agent.id ? "Cancel" : "Edit agent"}
+                          </button>
+                        </>
+                      )}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <Button
-                    variant="secondary"
-                    disabled={agent.status === "running"}
-                    onClick={() => runAgent(agent.id)}
-                    className="text-xs"
-                  >
-                    {agent.status === "running" ? "Running…" : "Run agent"}
-                  </Button>
+                  {canManage && (
+                    <Button
+                      variant="secondary"
+                      disabled={agent.status === "running"}
+                      onClick={() => runAgent(agent.id)}
+                      className="text-xs"
+                    >
+                      {agent.status === "running" ? "Running…" : "Run agent"}
+                    </Button>
+                  )}
                   {isHome && (
                     <button
-                      onClick={() => removeAgent(agent.id)}
+                      onClick={() => setConfirmRemoveId(agent.id)}
                       className="text-xs text-foreground-muted hover:text-danger"
                       title="Delete this agent"
                     >
@@ -123,11 +133,11 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                               : "border-border text-foreground-muted hover:bg-surface-raised"
                           }`}
                         >
-                          <button onClick={grantTool} title={tool.description}>
+                          <button onClick={grantTool} title={tool.description} disabled={!canManage}>
                             {granted ? "✓ " : "+ "}
                             {tool.name}
                           </button>
-                          {!granted && (
+                          {!granted && canManage && (
                             <button
                               type="button"
                               onClick={() => setExpandedTool(isExpanded ? null : key)}
@@ -162,6 +172,7 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                     const granted = agent.grants.some((g) => g.toolId === BASH_ACCESS_TOOL_ID);
                     return (
                       <button
+                        disabled={!canManage}
                         onClick={() => toggleTool(agent, BASH_ACCESS_TOOL_ID, granted)}
                         className={`rounded-full border py-1 px-2.5 text-xs font-medium transition-colors ${
                           granted
@@ -173,6 +184,24 @@ export function AgentsPanel({ taskRoomId }: { taskRoomId: string }) {
                       </button>
                     );
                   })()}
+                </div>
+              )}
+
+              {confirmRemoveId === agent.id && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger">
+                  <span className="mr-auto">Remove {agent.name}? This can&apos;t be undone.</span>
+                  <Button variant="ghost" onClick={() => setConfirmRemoveId(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="danger"
+                    onClick={() => {
+                      removeAgent(agent.id);
+                      setConfirmRemoveId(null);
+                    }}
+                  >
+                    Remove agent
+                  </Button>
                 </div>
               )}
 

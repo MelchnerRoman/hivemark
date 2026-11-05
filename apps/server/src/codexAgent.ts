@@ -53,7 +53,6 @@ function modelValues(session: acp.NewSessionResponse): string[] {
 // The in-flight promise is cached too, so concurrent cold requests share one
 // codex-acp process; a failure is dropped from the cache so the next call retries.
 let codexModels: { at: number; models: Promise<string[]> } | null = null;
-const CODEX_MODELS_TIMEOUT_MS = Number(process.env.HIVEMARK_CODEX_MODELS_TIMEOUT_MS) || 30_000;
 export function listCodexModels(): Promise<string[]> {
   if (codexModels && Date.now() - codexModels.at < 10 * 60_000) return codexModels.models;
   const models = fetchCodexModels();
@@ -71,7 +70,8 @@ async function fetchCodexModels(): Promise<string[]> {
       requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
       sessionUpdate: async () => {},
     },
-    AbortSignal.timeout(CODEX_MODELS_TIMEOUT_MS)
+    // Read per call (not at load) so a test can shorten it for one case only.
+    AbortSignal.timeout(Number(process.env.HIVEMARK_CODEX_MODELS_TIMEOUT_MS) || 30_000)
   );
   try {
     await connection.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });

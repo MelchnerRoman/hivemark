@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { WebSocketServer, type VerifyClientCallbackSync } from "ws";
 import { repo } from "./db.js";
 import { bus } from "./events.js";
-import { findMentionedAgents, getTurnBridge, runAgentTurn, stopAgentTurn } from "./claudeAgent.js";
+import { findMentionedAgents, getActiveTurn, getTurnBridge, runAgentTurn, stopAgentTurn } from "./claudeAgent.js";
 import { startScheduler } from "./scheduler.js";
 import { getClaudeCodeAuthStatus, triggerClaudeCodeLogin } from "./claudeCodeAuth.js";
 import { isCliAvailable } from "./cliCheck.js";
@@ -312,7 +312,17 @@ app.get(
         return { ...tool, status: (await setup.check()) ? ("ready" as const) : ("needs_setup" as const) };
       })
     );
-    res.json({ ...state, mcpTools });
+    // Where each running agent is replying — only conversations the caller
+    // can see: a task room in their state, or their own DM (never another
+    // member's, the owner included).
+    const visibleTaskRooms = new Set(state.taskRooms.map((t) => t.id));
+    const agents = state.agents.map((a) => {
+      const turn = a.status === "running" ? getActiveTurn(a.id) : undefined;
+      if (turn?.kind === "dm" && turn.memberId === req.memberId) return { ...a, activeTurn: { dm: true as const } };
+      if (turn?.kind === "task_room" && visibleTaskRooms.has(turn.taskRoomId)) return { ...a, activeTurn: { taskRoomId: turn.taskRoomId } };
+      return a;
+    });
+    res.json({ ...state, mcpTools, agents });
   })
 );
 

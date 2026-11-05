@@ -12,7 +12,7 @@ import { runCodexTurn } from "./codexAgent.js";
 import { runGooseTurn } from "./gooseAgent.js";
 import { getRoomProjectDir, hasBashAccess, resolveFileInDir } from "./agentSandbox.js";
 import { createWorkspaceTools } from "./workspaceTools.js";
-import type { Agent } from "./types.js";
+import type { Agent, MessageMeta } from "./types.js";
 
 // Real work (a research report, a page of code, a design pass) takes many
 // tool round-trips and long outputs — the old 6 x 1024 tokens cut agents off.
@@ -31,6 +31,10 @@ const ATTACHMENT_BYTES_BUDGET = 20 * 1024 * 1024;
 // ~100k tokens: keeps a long room inside every model's context window
 // (Haiku's is 200k) — older messages are dropped with a note, not silently.
 const HISTORY_CHAR_BUDGET = 400_000;
+// Tool trace kept on a reply (MessageMeta.tools): enough to show what an
+// agent did, small enough to stay out of the way of the sync payload.
+const MAX_TOOL_TRACE = 50;
+const MAX_TOOL_INPUT_CHARS = 120;
 
 // originMemberId: the human whose message started this (handoff chain) —
 // handoffs only reach agents that member can see. Absent for a Loop.
@@ -106,6 +110,7 @@ function buildHistoryMessages(agent: Agent, turn: Turn): HistoryMessage[] {
   const history: HistoryMessage[] = [];
   if (turn.kind === "dm") {
     for (const m of repo.getDirectMessagesForAgent(agent.id, turn.memberId)) {
+      if (m.meta?.stoppedBy) continue; // a UI trace, not part of the conversation
       history.push({ role: m.authorType === "agent" ? "assistant" : "user", content: m.content });
     }
   } else {
@@ -117,6 +122,7 @@ function buildHistoryMessages(agent: Agent, turn: Turn): HistoryMessage[] {
     const memberName = (id: string) => members.find((m) => m.id === id)?.name ?? "Someone";
     const agents = repo.getAllAgents();
     for (const m of repo.getMessagesForTaskRoom(turn.taskRoomId)) {
+      if (m.meta?.stoppedBy) continue; // a UI trace, not part of the conversation
       const content = withAttachmentNote(m.content, m.attachments);
       if (m.authorType === "agent" && m.authorId === agent.id) {
         history.push({ role: "assistant", content });
@@ -332,6 +338,11 @@ export function getTurnBridge(token: string) {
 }
 const queuedTurns = new Map<string, Turn[]>();
 
+/** The conversation `agentId` is replying in right now, if it's mid-turn. */
+export function getActiveTurn(agentId: string): Turn | undefined {
+  return agentsInFlight.get(agentId)?.turn;
+}
+
 function conversationKey(turn: Turn) {
   return turn.kind === "dm" ? `dm:${turn.memberId}` : turn.taskRoomId;
 }
@@ -348,7 +359,8 @@ export function stopAgentTurn(agentId: string, memberId?: string): boolean {
   else queuedTurns.delete(agentId);
   const running = agentsInFlight.get(agentId);
   if (running && !stoppable(running.turn)) return true;
-  running?.controller.abort();
+  // The reason tells the turn who stopped it, for the "Stopped by" trace.
+  running?.controller.abort({ stoppedBy: memberId });
   return false;
 }
 
@@ -399,12 +411,13 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
   repo.setAgentStatus(agentId, "running");
   notifySync();
 
-  const reply = (text: string, attachments: string[] = []) => {
+  const reply = (text: string, attachments: string[] = [], meta?: MessageMeta) => {
     if (turn.kind === "dm") {
-      return repo.addDirectMessage(agentId, "agent", withAttachmentNote(text, attachments), null, turn.memberId);
+      return repo.addDirectMessage(agentId, "agent", withAttachmentNote(text, attachments), null, turn.memberId, meta);
     }
+    if (meta?.stoppedBy) return repo.addMessage(turn.taskRoomId, "agent", agentId, text, [], [], meta);
     const mentioned = findMentionedAgents(text).filter((a) => a.id !== agentId && canHandOffTo(turn, a));
-    repo.addMessage(turn.taskRoomId, "agent", agentId, text, mentioned.map((a) => a.id), attachments);
+    repo.addMessage(turn.taskRoomId, "agent", agentId, text, mentioned.map((a) => a.id), attachments, meta);
     const depth = (turn.depth ?? 0) + 1;
     if (depth > MAX_HANDOFF_DEPTH) {
       if (mentioned.length) console.log(`[agent] handoff chain hit depth ${MAX_HANDOFF_DEPTH} — not triggering further`);
@@ -451,9 +464,22 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
   const turnToken = bridged && workspace ? randomBytes(24).toString("hex") : null;
   if (turnToken) turnBridges.set(turnToken, { workspace: workspace!, signal });
   const tools = [...mcpTools, ...(workspace?.defs ?? [])];
+  // What the agent called this turn, shown under its reply (MessageMeta.tools).
+  // Covers the runtimes whose tool loop runs here; the CLI runtimes only
+  // report their final text.
+  const toolTrace: NonNullable<MessageMeta["tools"]> = [];
+  const traceTool = (name: string, input: unknown) => {
+    if (toolTrace.length >= MAX_TOOL_TRACE) return; // ponytail: later calls dropped, count shows the cap
+    const json = input && typeof input === "object" && Object.keys(input).length ? JSON.stringify(input) : "";
+    toolTrace.push({
+      name,
+      ...(json && { input: json.length > MAX_TOOL_INPUT_CHARS ? `${json.slice(0, MAX_TOOL_INPUT_CHARS)}…` : json }),
+    });
+  };
   // A throwing tool (network error, non-JSON error page, disk full) is a
   // tool_result error the model can react to, not a failed turn.
   const callTool = async (name: string, args: Record<string, unknown>): Promise<ToolResult> => {
+    traceTool(name, args);
     try {
       return (await workspace?.call(name, args, signal)) ?? (await session.call(name, args));
     } catch (err) {
@@ -532,6 +558,8 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
             )
             .finalMessage();
 
+          // Server-side tools (web search/fetch) ran on Anthropic's side.
+          for (const b of response.content) if (b.type === "server_tool_use") traceTool(b.name, b.input);
           const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === "text");
           finalText = textBlocks.map((b) => b.text).join("\n").trim();
           if (response.stop_reason === "refusal" && !finalText) finalText = "I can't help with that request.";
@@ -566,10 +594,14 @@ async function runAgentTurnLocked(agentId: string, turn: Turn, signal: AbortSign
 
     signal.throwIfAborted(); // a runtime that resolved despite the abort still mustn't post
     repo.setAgentStatus(agentId, "idle");
-    reply(finalText || "(no response)", workspace?.attachments ?? []);
+    reply(finalText || "(no response)", workspace?.attachments ?? [], toolTrace.length ? { tools: toolTrace } : undefined);
   } catch (err) {
     if (signal.aborted) {
       repo.setAgentStatus(agentId, "idle");
+      // A small trace so the conversation shows why no reply came. No member
+      // (the agent is being deleted): nothing to show it in.
+      const stoppedBy = (signal.reason as { stoppedBy?: string } | undefined)?.stoppedBy;
+      if (stoppedBy) reply(`Stopped by ${repo.getMember(stoppedBy)?.name ?? "a teammate"}`, [], { stoppedBy });
       return;
     }
     console.error(`agent turn failed (${agentId}, runtime=${runtime}):`, err);

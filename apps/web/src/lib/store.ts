@@ -527,7 +527,7 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   stopAgent: (agentId) => {
-    set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, status: "idle" } : a)) }));
+    set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, status: "idle", activeTurn: undefined } : a)) }));
     api.stopAgent(agentId).then(refresh, fail);
   },
 

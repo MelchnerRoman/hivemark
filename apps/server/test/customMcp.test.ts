@@ -112,6 +112,10 @@ test("owner adds a stdio server, grants it, and an agent turn calls it", async (
   assert.match(text, /secret:ok/, "stored env passed to the server");
   assert.match(text, /anthropic:clean/, "server's own env not leaked");
   assert.match(text, /arg:hello-arg/);
+
+  // The reply carries a trace of the tool call, in the DB and in /api/state.
+  const reply = JSON.parse(await state("in")).messages.find((m: { authorId: string }) => m.authorId === agentId);
+  assert.deepEqual(reply.meta, { tools: [{ name: `${TOOL_ID}__echo`, input: '{"text":"ping"}' }] });
 });
 
 test("update keeps secrets unless given; delete removes it and its grants", async () => {

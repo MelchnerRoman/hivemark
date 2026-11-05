@@ -7,7 +7,7 @@ import { AGENT_STATUS_TONE } from "@/lib/display";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { MessageRow } from "@/components/workspace/MessageRow";
+import { MessageRow, WorkingRow } from "@/components/workspace/MessageRow";
 import { AgentFiles } from "@/components/workspace/FilesPanel";
 import { useStickToBottom } from "@/lib/useStickToBottom";
 
@@ -19,8 +19,12 @@ export function DirectMessageView() {
   const deleteDirectMessage = useStore((s) => s.deleteDirectMessage);
   const goToAgentInContext = useStore((s) => s.goToAgentInContext);
   const me = useStore((s) => s.members.find((m) => m.id === s.currentMemberId));
+  const stopAgent = useStore((s) => s.stopAgent);
+  // The stop route takes members of the agent's home task room.
+  const canStop = useStore((s) => s.taskRooms.some((t) => t.id === agent?.taskRoomId));
+  const working = !!agent?.activeTurn && "dm" in agent.activeTurn;
   const [editingId, setEditingId] = useState<string | null>(null);
-  const { ref, onScroll } = useStickToBottom(messages, agentId ?? "");
+  const { ref, onScroll } = useStickToBottom(messages, agentId ?? "", working);
 
   if (!agentId || !agent) {
     return (
@@ -75,7 +79,15 @@ export function DirectMessageView() {
             />
           );
         })}
-        {messages.length === 0 && (
+        {working && (
+          <WorkingRow
+            name={agent.name}
+            avatarEmoji={agent.avatarEmoji}
+            color={agent.color}
+            onStop={canStop ? () => stopAgent(agent.id) : undefined}
+          />
+        )}
+        {messages.length === 0 && !working && (
           <p className="pt-10 text-center text-sm text-foreground-muted">
             {`Send ${agent.name} a direct message — it only sees this conversation, not any Task Room chat.`}
           </p>

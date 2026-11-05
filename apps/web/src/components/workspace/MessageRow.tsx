@@ -5,6 +5,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { AuthImage } from "@/components/ui/AuthImage";
 import { downloadRoomFile, isImagePath } from "@/lib/api";
 import { attachmentName, formatTime } from "@/lib/display";
+import type { MessageMeta } from "@/lib/types";
 
 /** One chat message (Task Room chat and DMs). Memoized with only primitive /
  * stable props, so a new message, a keystroke in the composer, or opening an
@@ -22,7 +23,7 @@ export const MessageRow = memo(function MessageRow({
   onDelete,
   roomId,
 }: {
-  message: { id: string; content: string; createdAt: string; editedAt: string | null; attachments?: string[] };
+  message: { id: string; content: string; createdAt: string; editedAt: string | null; attachments?: string[]; meta?: MessageMeta };
   name: string;
   initials: string;
   color: string;
@@ -41,6 +42,15 @@ export const MessageRow = memo(function MessageRow({
   function save() {
     if (editDraft.trim()) onSave(m.id, editDraft.trim());
     setEditingId(null);
+  }
+
+  // The trace a stopped turn leaves — a muted line, not a message.
+  if (m.meta?.stoppedBy) {
+    return (
+      <p className="pl-[42px] text-xs text-foreground-muted">
+        ⏹ {name} · {m.content} · {formatTime(m.createdAt)}
+      </p>
+    );
   }
 
   return (
@@ -98,6 +108,7 @@ export const MessageRow = memo(function MessageRow({
         ) : (
           m.content && <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{m.content}</p>
         )}
+        {m.meta?.tools && m.meta.tools.length > 0 && <ToolTrace tools={m.meta.tools} />}
         {roomId && (m.attachments?.length ?? 0) > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {m.attachments!.map((p) =>
@@ -121,3 +132,51 @@ export const MessageRow = memo(function MessageRow({
     </div>
   );
 });
+
+/** "Used tools: echo, read_file (3)" — expands to each call and its input. */
+function ToolTrace({ tools }: { tools: NonNullable<MessageMeta["tools"]> }) {
+  const counts = new Map<string, number>();
+  for (const t of tools) counts.set(t.name, (counts.get(t.name) ?? 0) + 1);
+  // MCP tools are "<server>__<tool>" — the tool part is what reads well.
+  const short = (name: string) => name.split("__").at(-1)!;
+  const summary = [...counts].map(([name, n]) => (n > 1 ? `${short(name)} (${n})` : short(name))).join(", ");
+  return (
+    <details className="mt-1.5 text-xs text-foreground-muted">
+      <summary className="cursor-pointer select-none hover:text-foreground">Used tools: {summary}</summary>
+      <ul className="mt-1 space-y-0.5 border-l border-border pl-3 font-mono">
+        {tools.map((t, i) => (
+          <li key={i} className="break-all">
+            {t.name}
+            {t.input && <span className="opacity-70"> {t.input}</span>}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/** Typing-style row under the messages while an agent works on a reply in
+ * this conversation. `onStop` only when the viewer may stop that turn. */
+export function WorkingRow({
+  name,
+  avatarEmoji,
+  color,
+  onStop,
+}: {
+  name: string;
+  avatarEmoji: string;
+  color: string;
+  onStop?: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3" role="status">
+      <Avatar label={avatarEmoji} color={color} size={30} />
+      <span className="animate-pulse text-sm text-foreground-muted">{name} is working…</span>
+      {onStop && (
+        <button onClick={onStop} className="text-xs text-foreground-muted hover:text-danger" aria-label={`Stop ${name}`}>
+          Stop
+        </button>
+      )}
+    </div>
+  );
+}

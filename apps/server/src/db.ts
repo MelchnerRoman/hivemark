@@ -14,6 +14,7 @@ import type {
   AgentTeamMode,
   AppState,
   ChatMessage,
+  MessageMeta,
   CustomMcpPublic,
   ConnectionKey,
   ConnectionStatus,
@@ -304,6 +305,13 @@ for (const table of ["messages", "direct_messages"]) {
   if (!cols.some((c) => c.name === "attachments")) {
     db.exec("ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'");
   }
+}
+
+// Agent-reply metadata (tool trace, stop trace) — added after messages/DMs
+// could already exist.
+for (const table of ["messages", "direct_messages"]) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === "meta")) db.exec(`ALTER TABLE ${table} ADD COLUMN meta TEXT`);
 }
 
 // Built-in (not MCP) capability — Anthropic's server-side web search/fetch,
@@ -657,6 +665,7 @@ function rowToMessage(r: any): ChatMessage {
     mentionedAgentIds: parseArray(r.mentioned_agent_ids),
     attachments: parseArray(r.attachments),
     editedAt: r.edited_at ?? null,
+    ...(r.meta && { meta: JSON.parse(r.meta) }),
   };
 }
 
@@ -670,6 +679,7 @@ function rowToDm(r: any): DirectMessage {
     content: r.content,
     createdAt: r.created_at,
     editedAt: r.edited_at ?? null,
+    ...(r.meta && { meta: JSON.parse(r.meta) }),
   };
 }
 
@@ -1065,12 +1075,13 @@ export const repo = {
     authorId: string,
     content: string,
     mentionedAgentIds: string[] = [],
-    attachments: string[] = []
+    attachments: string[] = [],
+    meta?: MessageMeta
   ): ChatMessage {
     const messageId = id("msg");
     const createdAt = nowIso();
     db.prepare(
-      "INSERT INTO messages (id, task_room_id, author_type, author_id, content, created_at, mentioned_agent_ids, attachments) VALUES (?,?,?,?,?,?,?,?)"
+      "INSERT INTO messages (id, task_room_id, author_type, author_id, content, created_at, mentioned_agent_ids, attachments, meta) VALUES (?,?,?,?,?,?,?,?,?)"
     ).run(
       messageId,
       taskRoomId,
@@ -1079,7 +1090,8 @@ export const repo = {
       content,
       createdAt,
       JSON.stringify(mentionedAgentIds),
-      JSON.stringify(attachments)
+      JSON.stringify(attachments),
+      meta ? JSON.stringify(meta) : null
     );
     return rowToMessage(db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId));
   },
@@ -1107,13 +1119,14 @@ export const repo = {
     authorType: "member" | "agent",
     content: string,
     authorId: string | null,
-    memberId: string
+    memberId: string,
+    meta?: MessageMeta
   ): DirectMessage {
     const dmId = id("dm");
     const createdAt = nowIso();
     db.prepare(
-      "INSERT INTO direct_messages (id, agent_id, author_type, author_id, member_id, content, created_at) VALUES (?,?,?,?,?,?,?)"
-    ).run(dmId, agentId, authorType, authorId, memberId, content, createdAt);
+      "INSERT INTO direct_messages (id, agent_id, author_type, author_id, member_id, content, created_at, meta) VALUES (?,?,?,?,?,?,?,?)"
+    ).run(dmId, agentId, authorType, authorId, memberId, content, createdAt, meta ? JSON.stringify(meta) : null);
     return rowToDm(db.prepare("SELECT * FROM direct_messages WHERE id = ?").get(dmId));
   },
 

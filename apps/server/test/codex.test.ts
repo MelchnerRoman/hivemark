@@ -7,7 +7,6 @@ import path from "node:path";
 import { test } from "node:test";
 
 process.env.HIVEMARK_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hivemark-test-"));
-process.env.HIVEMARK_CODEX_MODELS_TIMEOUT_MS = "1000";
 const bin = fs.mkdtempSync(path.join(os.tmpdir(), "hivemark-fake-npx-"));
 const spawnLog = path.join(bin, "spawns.log");
 // Fake codex-acp: answers initialize + session/new with one model, or hangs
@@ -40,12 +39,16 @@ const { listCodexModels } = await import("../src/codexAgent.ts");
 const spawns = () => (fs.existsSync(spawnLog) ? fs.readFileSync(spawnLog, "utf8").split("\n").length - 1 : 0);
 
 test("a hung codex-acp times out instead of holding /api/models open forever", async () => {
+  // Short timeout for this case only — the success test below needs ~0.5s
+  // of real work (process start + the fake's replies), more under load.
+  process.env.HIVEMARK_CODEX_MODELS_TIMEOUT_MS = "1000";
   process.env.FAKE_CODEX_HANG = "1";
   const outcome = await Promise.race([
     listCodexModels().then(() => "resolved", () => "rejected"),
     new Promise((r) => setTimeout(() => r("hung"), 5000)),
   ]);
   delete process.env.FAKE_CODEX_HANG;
+  delete process.env.HIVEMARK_CODEX_MODELS_TIMEOUT_MS;
   assert.equal(outcome, "rejected");
 });
 

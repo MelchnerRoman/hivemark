@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { uploadRoomFile } from "@/lib/api";
 import { useStickToBottom } from "@/lib/useStickToBottom";
 import { attachmentName } from "@/lib/display";
-import { MessageRow } from "./MessageRow";
+import { MessageRow, WorkingRow } from "./MessageRow";
 import type { Agent } from "@/lib/types";
 
 // Matches an "@" that starts a mention-in-progress at the end of the draft,
@@ -24,8 +24,11 @@ export function ChatPane({ taskRoomId }: { taskRoomId: string }) {
   const deleteMessage = useStore((s) => s.deleteMessage);
   const currentMemberId = useStore((s) => s.currentMemberId);
   const roomId = useStore((s) => s.taskRooms.find((t) => t.id === taskRoomId)?.roomId);
+  const taskRooms = useStore((s) => s.taskRooms);
+  const stopAgent = useStore((s) => s.stopAgent);
+  const working = agents.filter((a) => a.activeTurn && "taskRoomId" in a.activeTurn && a.activeTurn.taskRoomId === taskRoomId);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const { ref, onScroll } = useStickToBottom(messages, taskRoomId);
+  const { ref, onScroll } = useStickToBottom(messages, taskRoomId, working.length);
 
   function author(authorType: "member" | "agent", authorId: string) {
     if (authorType === "member") {
@@ -60,7 +63,17 @@ export function ChatPane({ taskRoomId }: { taskRoomId: string }) {
             />
           );
         })}
-        {messages.length === 0 && (
+        {working.map((a) => (
+          <WorkingRow
+            key={a.id}
+            name={a.name}
+            avatarEmoji={a.avatarEmoji}
+            color={a.color}
+            // The stop route takes members of the agent's home task room.
+            onStop={taskRooms.some((t) => t.id === a.taskRoomId) ? () => stopAgent(a.id) : undefined}
+          />
+        ))}
+        {messages.length === 0 && working.length === 0 && (
           <p className="pt-10 text-center text-sm text-foreground-muted">
             No messages yet in this Task Room. Say hello, @mention an agent, or let one kick things off.
           </p>

@@ -44,6 +44,9 @@ export type Agent = {
   status: "idle" | "running" | "error";
   createdById: string;
   grants: AgentGrant[];
+  /** While running: the conversation it's replying in, if the caller can
+   * see it (a task room of theirs, or their own DM with it). */
+  activeTurn?: { taskRoomId: string } | { dm: true };
 };
 
 export type AgentDefaults = {
@@ -83,6 +86,14 @@ export type AgentTeam = {
 
 export type AppView = "rooms" | "agents" | "dm";
 
+/** Extra detail on an agent-authored message. */
+export type MessageMeta = {
+  /** Tools the agent called during the turn this message ends. */
+  tools?: { name: string; input?: string }[];
+  /** The "Stopped by …" trace left when a member stops a turn. */
+  stoppedBy?: string;
+};
+
 export type ChatMessage = {
   id: string;
   taskRoomId: string;
@@ -94,6 +105,7 @@ export type ChatMessage = {
   /** Paths inside the Room's shared project folder (see agentSandbox.ts). */
   attachments: string[];
   editedAt: string | null;
+  meta?: MessageMeta;
 };
 
 export type DirectMessage = {
@@ -105,6 +117,7 @@ export type DirectMessage = {
   content: string;
   createdAt: string;
   editedAt: string | null;
+  meta?: MessageMeta;
 };
 
 export type WorkflowStep = {
